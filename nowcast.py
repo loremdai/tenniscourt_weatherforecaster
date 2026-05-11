@@ -12,8 +12,9 @@ import argparse
 import json
 import math
 import re
-import sys
+import time
 import urllib.request
+import ssl
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -36,6 +37,17 @@ ALPHA_THRESHOLD = 8
 HORIZONS = {"30min": 5, "60min": 10, "120min": 20}
 EARTH_RADIUS_KM = 6371.0088
 SOURCE_TZ = timezone(timedelta(hours=8))
+
+# GD121 API Constants
+API_URL_TEMPLATE = "https://wxc.gd121.cn/gdecloud/servlet/servletcityweatherall4?DISTRICTCODE=440402&LNG={lon}&LAT={lat}&FROM=binfen"
+API_HEADERS = {
+    "Host": "wxc.gd121.cn",
+    "Accept": "application/json, text/plain, */*",
+    "Origin": "https://mp.gd121.cn",
+    "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 26_4_2 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148 MicroMessenger/8.0.73(0x18004923) NetType/4G Language/zh_CN miniProgram/wx4e37a66956191c3a",
+    "Referer": "https://mp.gd121.cn/",
+    "Accept-Language": "en-US,en;q=0.9",
+}
 
 # Approximate CAPPI legend colors sampled from the displayed legend.
 DBZ_PALETTE = [
@@ -101,11 +113,34 @@ def parse_args() -> argparse.Namespace:
         default=12,
         help="Maximum newest CAPPI frames to use.",
     )
+    parser.add_argument(
+        "--daemon",
+        action="store_true",
+        help="Run continuously, fetching data from the API.",
+    )
+    parser.add_argument(
+        "--interval",
+        type=int,
+        default=360,
+        help="Interval in seconds between API fetches in daemon mode (default: 360).",
+    )
     return parser.parse_args()
 
 
 def load_response(path: Path) -> dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def fetch_weather_data(lon: float, lat: float) -> dict[str, Any]:
+    url = API_URL_TEMPLATE.format(lon=lon, lat=lat)
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+
+    req = urllib.request.Request(url, headers=API_HEADERS)
+    with urllib.request.urlopen(req, context=ctx, timeout=30) as response:
+        data = response.read().decode('utf-8')
+        return json.loads(data)
 
 
 def first_row(payload: dict[str, Any]) -> dict[str, Any]:
@@ -393,22 +428,43 @@ def build_report(row: dict[str, Any], bounds: Bounds, frames: list[Frame], debug
     return report
 
 
-def main() -> int:
-    args = parse_args()
-    payload = load_response(Path(args.response))
+def run_once(args: argparse.Namespace) -> None:
+    if args.daemon:
+        print(f"Fetching live data for lon={COURT['lon']}, lat={COURT['lat']}...")
+        payload = fetch_weather_data(COURT["lon"], COURT["lat"])
+    else:
+        print(f"Loading local response from {args.response}...")
+        payload = load_response(Path(args.response))
+        
     row = first_row(payload)
     bounds = parse_bounds(row)
     entries = collect_cappi(row, args.max_frames)
     frames = load_frames(entries, Path(args.cache_dir))
     report = build_report(row, bounds, frames, args.debug_image)
     text = json.dumps(report, ensure_ascii=False, indent=2)
+    
     if args.output == "-":
         print(text)
     else:
         output = Path(args.output)
         output.parent.mkdir(parents=True, exist_ok=True)
         output.write_text(text + "\n", encoding="utf-8")
-        print(f"Wrote {output}")
+        print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Wrote {output}")
+
+
+def main() -> int:
+    args = parse_args()
+    if args.daemon:
+        print(f"Starting in daemon mode. Interval: {args.interval}s")
+        while True:
+            try:
+                run_once(args)
+            except Exception as e:
+                print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Error in daemon iteration: {e}", file=sys.stderr)
+            print(f"Waiting {args.interval} seconds...")
+            time.sleep(args.interval)
+    else:
+        run_once(args)
     return 0
 
 

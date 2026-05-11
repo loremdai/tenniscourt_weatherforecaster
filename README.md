@@ -9,10 +9,28 @@ probability report for one fixed court:
 - Detection radius: `5 km`
 - Rain threshold: `>= 15 dBZ`
 
-## Run
+## 运行方式
+
+### 1. 本地测试模式 (一次性运行)
+
+依赖手动抓包获取 `stream-response.txt`：
 
 ```bash
 python3 nowcast.py --response response.txt
+```
+
+### 2. 持续监测模式 (守护进程)
+
+直接调用广东天气 API 持续拉取最新数据，并覆盖更新输出结果：
+
+```bash
+python3 nowcast.py --daemon
+```
+
+默认每 6 分钟 (360秒) 刷新一次。也可以自定义间隔（例如 10 分钟）：
+
+```bash
+python3 nowcast.py --daemon --interval 600
 ```
 
 Default outputs:
