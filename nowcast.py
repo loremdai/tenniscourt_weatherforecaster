@@ -422,6 +422,49 @@ def official_summary(row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def extract_station_realtime(row: dict[str, Any]) -> dict[str, Any]:
+    """Extract ground station real-time observations (sk_) and daily forecast (f_rows)."""
+    def _safe_float(val: Any, default: float = 0.0) -> float:
+        try:
+            v = float(val)
+            return default if v >= 9999 else v
+        except (ValueError, TypeError):
+            return default
+
+    f_rows = row.get("f_rows", [])
+    daily_forecast = []
+    if isinstance(f_rows, list):
+        for item in f_rows[:6]:
+            if isinstance(item, dict):
+                daily_forecast.append({
+                    "weather": item.get("s", ""),
+                    "temp": item.get("t", ""),
+                    "wind_speed": item.get("ws", ""),
+                    "wind_dir": item.get("wd", ""),
+                })
+
+    return {
+        "station_name": row.get("sk_s_location", ""),
+        "observation_time": row.get("sk_time", ""),
+        "temperature": _safe_float(row.get("sk_t")),
+        "feels_like": _safe_float(row.get("sk_t_feel")),
+        "humidity_pct": _safe_float(row.get("sk_h")),
+        "pressure_hpa": _safe_float(row.get("sk_p")),
+        "wind": row.get("sk_w", ""),
+        "wind_speed_mps": _safe_float(row.get("sk_wp")),
+        "wind_power_level": int(_safe_float(row.get("sk_wp_level"))),
+        "wind_direction_deg": _safe_float(row.get("sk_wd")),
+        "rain_5min_mm": _safe_float(row.get("sk_r5m")),
+        "rain_1h_mm": _safe_float(row.get("sk_r1h")),
+        "visibility_m": _safe_float(row.get("sk_visi")),
+        "weather_state": row.get("sk_s", ""),
+        "aqi": int(_safe_float(row.get("pm_aqi"))),
+        "aqi_level": row.get("pm_q", ""),
+        "pm25": _safe_float(row.get("pm_pm25")),
+        "daily_forecast": daily_forecast,
+    }
+
+
 def build_report(row: dict[str, Any], bounds: Bounds, frames: list[Frame], debug_image: str) -> dict[str, Any]:
     latest = frames[-1]
     height, width = latest.dbz.shape
@@ -514,6 +557,7 @@ def build_report(row: dict[str, Any], bounds: Bounds, frames: list[Frame], debug
         "max_dbz_nearby": max_dbz_nearby,
         "playable_coverage_ratio": coverage_ratio,
         "diagnostics": diagnostics,
+        "station_realtime": extract_station_realtime(row),
         **official_summary(row),
     }
     return report
