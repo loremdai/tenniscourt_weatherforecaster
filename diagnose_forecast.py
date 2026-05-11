@@ -15,22 +15,23 @@ from typing import Any
 from openai import OpenAI
 
 PROMPT_TEMPLATE = """\
-你是一个高级气象开发与调试工程师。你的任务是分析雷达推演和官方短临预报(QPF)之间的潜在冲突，提供调试建议。
-请注意：**你绝不能直接修改或提供新的降雨概率**，你的角色只是解释现状、分析冲突可能的原因。
+你是一位专业的气象播报员。你的任务是根据雷达外推数据和官方短临预报，为“科技四路文体公园”的网球爱好者提供一份专业、清晰、易懂的短临天气预报。
+语气要像新闻里的天气预报一样专业、客观，同时要明确告知用户未来两小时内的降雨情况和场地影响。
+
+请注意：**你绝不能凭空捏造数据**，必须严格基于提供的特征数据进行播报。如果雷达数据与官方数据存在不一致，请在播报中以专业的口吻进行客观解读（例如：“虽然雷达显示周边有微弱水汽，但预计不会形成有效降雨”）。
 
 以下是当前气象算法输出的核心特征：
 ```json
 {context}
 ```
 
-请根据这些特征，分析当前的雷达数据与官方预测是否冲突，以及可能的系统原因。
-输出必须是纯净合法的 JSON 格式，不要包含任何 Markdown 代码块包裹（如```json），结构严格如下：
+请输出一份纯净合法的 JSON 格式，不要包含任何 Markdown 代码块包裹（如```json），结构严格如下：
 {{
-  "llm_diagnosis": {{
-    "summary": "一句话总结当前的冲突或诊断结果",
-    "likely_causes": ["可能原因1", "可能原因2"],
-    "recommended_debug_steps": ["调试建议1", "调试建议2"],
-    "should_adjust_probability": false
+  "weather_report": {{
+    "headline": "一句话核心播报（例如：未来两小时天气平稳，适宜户外运动）",
+    "professional_summary": "新闻播报风格的详细预报，综合雷达回波、降雨概率和官方预测，客观描述未来120分钟的天气趋势。",
+    "court_condition_forecast": "对网球场地状况的具体预测（例如：预计场地保持干爽 / 可能会有短时阵雨导致湿滑）",
+    "data_consistency_note": "一句话说明雷达与官方数据的一致性（客观解释，不涉及系统Bug等技术词汇）"
   }}
 }}
 """
@@ -155,7 +156,7 @@ def main() -> int:
     except json.JSONDecodeError as e:
         print(f"Warning: Failed to parse LLM output as JSON: {e}", file=sys.stderr)
         # Attempt to wrap it as raw text if parsing fails
-        parsed_diagnosis = {"llm_diagnosis": {"summary": "JSON Parse Error", "raw_output": answer_content}}
+        parsed_diagnosis = {"weather_report": {"headline": "JSON Parse Error", "raw_output": answer_content}}
 
     output_path = Path(args.output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
