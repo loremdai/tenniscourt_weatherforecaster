@@ -33,7 +33,8 @@ COURT = {
     "lat": 22.39,
 }
 RADIUS_KM = 5.0
-RAIN_DBZ_THRESHOLD = 15
+RADAR_ECHO_THRESHOLD_DBZ = 15
+PLAYABLE_RAIN_THRESHOLD_DBZ = 25
 ALPHA_THRESHOLD = 8
 HORIZONS = {"30min": 5, "60min": 10, "120min": 20}
 EARTH_RADIUS_KM = 6371.0088
@@ -310,26 +311,61 @@ def translate_dbz(dbz: np.ndarray, dx: float, dy: float, steps: int) -> np.ndarr
     )
 
 
+def dbz_to_rain_rate(dbz: float) -> float:
+    """Marshall-Palmer Z-R relationship (Z = 200 * R^1.6)"""
+    if dbz <= 0:
+        return 0.0
+    z = 10 ** (dbz / 10.0)
+    return (z / 200.0) ** (1 / 1.6)
+
+
 def summarize_area(dbz: np.ndarray, mask: np.ndarray) -> dict[str, float]:
     values = dbz[mask]
-    rainy = values >= RAIN_DBZ_THRESHOLD
-    coverage = float(rainy.mean()) if values.size else 0.0
+    has_echo = values >= RADAR_ECHO_THRESHOLD_DBZ
+    has_playable = values >= PLAYABLE_RAIN_THRESHOLD_DBZ
+    
+    echo_coverage = float(has_echo.mean()) if values.size else 0.0
+    playable_coverage = float(has_playable.mean()) if values.size else 0.0
     max_dbz = float(values.max()) if values.size else 0.0
-    mean_dbz = float(values[rainy].mean()) if rainy.any() else 0.0
-    return {"coverage_ratio": coverage, "max_dbz": max_dbz, "mean_rain_dbz": mean_dbz}
+    
+    mean_rain_rate = 0.0
+    if has_playable.any():
+        rain_rates = [dbz_to_rain_rate(float(v)) for v in values[has_playable]]
+        mean_rain_rate = float(np.mean(rain_rates))
+        
+    return {
+        "echo_coverage": echo_coverage,
+        "playable_coverage": playable_coverage,
+        "max_dbz": max_dbz,
+        "mean_rain_rate": mean_rain_rate
+    }
 
 
-def probability_from_stats(stats: dict[str, float], horizon_steps: int, motion_consistency: float) -> float:
-    coverage = stats["coverage_ratio"]
+def probability_from_stats(
+    stats: dict[str, float], 
+    horizon_steps: int, 
+    motion_consistency: float,
+    qpf_has_rain: bool
+) -> float:
+    coverage = stats["playable_coverage"]
     max_dbz = stats["max_dbz"]
-    if max_dbz < RAIN_DBZ_THRESHOLD:
-        return round(min(0.14, coverage * 4.0), 2)
-
-    intensity_score = min(1.0, (max_dbz - RAIN_DBZ_THRESHOLD) / 30.0)
-    coverage_score = min(1.0, coverage / 0.08)
-    horizon_discount = {5: 1.0, 10: 0.85, 20: 0.62}.get(horizon_steps, 0.7)
-    raw = (0.34 + 0.38 * coverage_score + 0.20 * intensity_score + 0.08 * motion_consistency)
-    return round(float(max(0.0, min(0.98, raw * horizon_discount))), 2)
+    rain_rate = stats["mean_rain_rate"]
+    
+    if max_dbz < PLAYABLE_RAIN_THRESHOLD_DBZ:
+        base_prob = min(0.1, stats["echo_coverage"] * 0.5)
+    else:
+        coverage_score = min(1.0, coverage / 0.15)
+        intensity_score = min(1.0, rain_rate / 5.0)
+        raw = 0.2 + 0.5 * coverage_score + 0.3 * intensity_score
+        horizon_discount = {5: 1.0, 10: 0.85, 20: 0.62}.get(horizon_steps, 0.7)
+        base_prob = raw * horizon_discount * (0.8 + 0.2 * motion_consistency)
+        
+    if base_prob > 0.2 and not qpf_has_rain:
+        base_prob *= 0.5
+    elif base_prob < 0.2 and qpf_has_rain:
+        base_prob = max(base_prob, 0.3)
+        
+    return round(float(max(0.0, min(0.99, base_prob))), 2)
 
 
 def confidence_label(horizon_steps: int, motion_consistency: float, frame_count: int) -> str:
@@ -358,6 +394,21 @@ def create_debug_image(latest: Frame, bounds: Bounds, mask: np.ndarray, path: Pa
     Image.alpha_composite(base, overlay).save(path)
 
 
+def check_qpf_rain(row: dict[str, Any], steps: int) -> bool:
+    qpf = row.get("qpf6min", [])
+    if not isinstance(qpf, list):
+        return False
+    for item in qpf[:steps]:
+        if isinstance(item, dict):
+            r_str = item.get("r", "0")
+            try:
+                if float(r_str) > 0:
+                    return True
+            except (ValueError, TypeError):
+                pass
+    return False
+
+
 def official_summary(row: dict[str, Any]) -> dict[str, Any]:
     qpf6min = row.get("qpf6min") if isinstance(row.get("qpf6min"), list) else []
     return {
@@ -382,14 +433,50 @@ def build_report(row: dict[str, Any], bounds: Bounds, frames: list[Frame], debug
     confidence: dict[str, str] = {}
     max_dbz_nearby: dict[str, int] = {}
     coverage_ratio: dict[str, float] = {}
+    
+    conflicts = set()
 
     for label, steps in HORIZONS.items():
         future = translate_dbz(latest.dbz, dx, dy, steps)
         stats = summarize_area(future, mask)
-        rain_probability[label] = probability_from_stats(stats, steps, motion_consistency)
+        qpf_rain = check_qpf_rain(row, steps)
+        
+        prob = probability_from_stats(stats, steps, motion_consistency, qpf_rain)
+        rain_probability[label] = prob
         confidence[label] = confidence_label(steps, motion_consistency, len(frames))
         max_dbz_nearby[label] = int(round(stats["max_dbz"]))
-        coverage_ratio[label] = round(stats["coverage_ratio"], 4)
+        coverage_ratio[label] = round(stats["playable_coverage"], 4)
+        
+        if prob > 0.3 and not qpf_rain:
+            conflicts.add("radar_qpf_disagreement")
+        elif prob < 0.3 and qpf_rain:
+            conflicts.add("qpf_rain_without_radar")
+
+    radar_has_echo = current_stats["max_dbz"] >= RADAR_ECHO_THRESHOLD_DBZ
+    radar_has_playable = current_stats["max_dbz"] >= PLAYABLE_RAIN_THRESHOLD_DBZ
+    qpf_has_rain_any = check_qpf_rain(row, 20)
+    
+    if motion_consistency < 0.5:
+        conflicts.add("low_motion_confidence")
+        
+    debug_hints = []
+    if "radar_qpf_disagreement" in conflicts:
+        debug_hints.append("CAPPI detects echo but QPF reports no rain. Verify if echo is below effective playable threshold.")
+    if "qpf_rain_without_radar" in conflicts:
+        debug_hints.append("QPF reports rain but CAPPI is clear. Could be low-level rain not visible to radar.")
+    if radar_has_echo and not radar_has_playable:
+        debug_hints.append("Weak echo detected (>=15, <25 dBZ). Likely no impact on court.")
+
+    diagnostics = {
+        "signals": {
+            "radar_has_echo": bool(radar_has_echo),
+            "radar_has_playable_rain_echo": bool(radar_has_playable),
+            "qpf_has_rain": bool(qpf_has_rain_any),
+            "motion_consistency": round(motion_consistency, 3)
+        },
+        "conflicts": list(conflicts),
+        "debug_hints": debug_hints
+    }
 
     if debug_image:
         create_debug_image(latest, bounds, mask, Path(debug_image))
@@ -418,12 +505,15 @@ def build_report(row: dict[str, Any], bounds: Bounds, frames: list[Frame], debug
         },
         "current": {
             "max_dbz_nearby": int(round(current_stats["max_dbz"])),
-            "coverage_ratio": round(current_stats["coverage_ratio"], 4),
+            "echo_coverage": round(current_stats["echo_coverage"], 4),
+            "playable_coverage": round(current_stats["playable_coverage"], 4),
+            "mean_rain_rate": round(current_stats["mean_rain_rate"], 2),
         },
         "rain_probability": rain_probability,
         "confidence": confidence,
         "max_dbz_nearby": max_dbz_nearby,
-        "coverage_ratio": coverage_ratio,
+        "playable_coverage_ratio": coverage_ratio,
+        "diagnostics": diagnostics,
         **official_summary(row),
     }
     return report
