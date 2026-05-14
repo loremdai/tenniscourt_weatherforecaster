@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="实时网球场天气监测仪表板 — 雷达分析、风险评估、AI诊断">
+    <title>网球天气决策系统</title>
+    <link rel="stylesheet" href="css/style.css">
+    <script src="https://unpkg.com/lucide@latest"></script>
+</head>
+<body>
+<div class="dashboard">
+    <!-- Header -->
+    <header class="header">
+        <div>
+            <h1 class="header-title">
+                <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z"/><path d="M22 10a3 3 0 0 0-3-3h-2.207a5.502 5.502 0 0 0-10.702.5"/></svg>
+                网球天气决策仪表板
+            </h1>
+            <div class="location-badge">
+                <span class="location-pin"><i data-lucide="map-pin"></i></span>
+                <span class="location-name" id="court-name">加载中...</span>
+                <span class="location-coords" id="court-coords"></span>
+            </div>
+        </div>
+        <div class="header-right">
+            <span class="ntp-clock"><i data-lucide="clock" style="width:13px;height:13px;"></i><span class="ntp-h" id="ntp-h">--</span><span class="ntp-colon">:</span><span class="ntp-m" id="ntp-m">--</span><span class="ntp-colon">:</span><span class="ntp-s" id="ntp-s">--</span></span>
+            <span id="update-time" class="update-time">最后更新: --:--</span>
+            <span class="live-badge"><span class="live-dot"></span>实时监测</span>
+        </div>
+    </header>
+
+    <!-- Bento Grid -->
+    <div class="grid">
+        <!-- 1: Hero — booking decision -->
+        <div class="card g-hero" id="hero-card">
+            <div class="hero-bar good" id="hero-bar"></div>
+            <div class="stitle hero-title"><span class="left"><i data-lucide="calendar-check"></i>预约决策</span></div>
+            <div class="hero-inner">
+                <div>
+                    <div class="hero-decision" id="booking-decision">加载中...</div>
+                    <div class="hero-window" id="booking-window"><i data-lucide="clock" style="width:15px;height:15px;color:var(--color-text-muted);"></i> --:--</div>
+                    <div class="hero-recheck" id="hero-recheck" style="display:none;"><i data-lucide="refresh-cw" style="width:10px;height:10px;"></i><span id="recheck-time"></span></div>
+                </div>
+                <div class="status-icon gl-green" id="status-icon"><i data-lucide="check-circle" style="width:26px;height:26px;color:var(--green);"></i></div>
+            </div>
+
+            <!-- Hero Extra -->
+            <div class="hero-extra">
+                <!-- Rain Message -->
+                <div class="rain-msg" id="rain-msg"><i data-lucide="umbrella" style="width:13px;height:13px;flex-shrink:0;"></i><span id="rain-msg-text">加载中...</span></div>
+
+                <!-- Today/Tomorrow + KPI — single row -->
+                <div class="hero-metrics-grid">
+                    <div class="hero-wx-card" id="hero-today">
+                        <span class="hero-wx-label">今天</span>
+                        <div class="hero-wx-body">
+                            <span class="hero-wx-icon" id="hero-today-icon"></span>
+                            <span class="hero-wx-temps"><span class="t-hi" id="hero-today-hi">--</span>°/<span class="t-lo" id="hero-today-lo">--</span>°</span>
+                        </div>
+                        <span class="hero-wx-desc" id="hero-today-wx">--</span>
+                    </div>
+                    <div class="hero-wx-card" id="hero-tomorrow">
+                        <span class="hero-wx-label">明天</span>
+                        <div class="hero-wx-body">
+                            <span class="hero-wx-icon" id="hero-tmr-icon"></span>
+                            <span class="hero-wx-temps"><span class="t-hi" id="hero-tmr-hi">--</span>°/<span class="t-lo" id="hero-tmr-lo">--</span>°</span>
+                        </div>
+                        <span class="hero-wx-desc" id="hero-tmr-wx">--</span>
+                    </div>
+                    <div class="hero-wx-card" id="hero-after-tomorrow">
+                        <span class="hero-wx-label">后天</span>
+                        <div class="hero-wx-body">
+                            <span class="hero-wx-icon" id="hero-after-icon"></span>
+                            <span class="hero-wx-temps"><span class="t-hi" id="hero-after-hi">--</span>°/<span class="t-lo" id="hero-after-lo">--</span>°</span>
+                        </div>
+                        <span class="hero-wx-desc" id="hero-after-wx">--</span>
+                    </div>
+                    <div class="hero-kpi">
+                        <i data-lucide="radar" style="width:14px;height:14px;" class="kpi-ico"></i>
+                        <span class="hero-kpi-val" id="kpi-dbz">--</span>
+                        <span class="hero-kpi-lbl">雷达 dBZ</span>
+                    </div>
+                    <div class="hero-kpi">
+                        <i data-lucide="shield-check" style="width:14px;height:14px;" class="kpi-ico"></i>
+                        <span class="hero-kpi-val" id="kpi-coverage">--</span>
+                        <span class="hero-kpi-lbl">可打率</span>
+                    </div>
+                    <div class="hero-kpi">
+                        <i data-lucide="cloud-rain-wind" style="width:14px;height:14px;" class="kpi-ico"></i>
+                        <span class="hero-kpi-val" id="kpi-rain-hrs">--</span>
+                        <span class="hero-kpi-lbl">窗口雨时</span>
+                    </div>
+                </div>
+
+                <!-- QPF Rain Chart -->
+                <div class="hero-rain-chart">
+                    <svg id="qpf-chart" class="qpf-svg" viewBox="0 0 400 80" preserveAspectRatio="none"></svg>
+                    <div class="rain-chart-times" id="qpf-times"></div>
+                </div>
+            </div>
+
+            <ul class="reasons" id="booking-reasons"></ul>
+        </div>
+
+        <!-- 2: Conditions -->
+        <div class="card g-cond">
+            <div class="stitle"><span class="left"><i data-lucide="thermometer-sun"></i>实时气象</span></div>
+            <div class="cond-grid">
+                <div class="cond-item"><div class="cond-ico"><i data-lucide="thermometer"></i></div><div><div class="cond-lbl">温度</div><div class="cond-val" id="rt-temp">--°C</div></div></div>
+                <div class="cond-item"><div class="cond-ico"><i data-lucide="droplets"></i></div><div><div class="cond-lbl">湿度</div><div class="cond-val" id="rt-humidity">--%</div></div></div>
+                <div class="cond-item"><div class="cond-ico"><i data-lucide="wind"></i></div><div><div class="cond-lbl">风力</div><div class="cond-val sm" id="rt-wind">--</div></div></div>
+                <div class="cond-item"><div class="cond-ico"><i data-lucide="sun"></i></div><div><div class="cond-lbl">天气</div><div class="cond-val sm" id="rt-state">--</div></div></div>
+            </div>
+        </div>
+
+        <!-- 3: Risk Timeline -->
+        <div class="card g-risk">
+            <div class="stitle"><span class="left"><i data-lucide="shield-alert"></i>降雨风险时间线</span></div>
+            <div class="risk-timeline-grid">
+                <div class="risk-row">
+                    <div class="risk-header">
+                        <div class="risk-l"><span class="risk-t">30m</span><span class="risk-n">短期</span></div>
+                        <div class="risk-metrics"><span class="badge low" id="risk-30-level">低</span><span class="risk-pct" id="risk-30-prob">--%</span></div>
+                    </div>
+                    <div class="risk-bar"><div class="risk-fill low" id="risk-30-bar" style="width:0%"></div></div>
+                    <div class="risk-meta"><span class="risk-meta-label">置信度</span><span class="conf high" id="conf-30">高</span></div>
+                </div>
+                <div class="risk-row">
+                    <div class="risk-header">
+                        <div class="risk-l"><span class="risk-t">60m</span><span class="risk-n">中期</span></div>
+                        <div class="risk-metrics"><span class="badge low" id="risk-60-level">低</span><span class="risk-pct" id="risk-60-prob">--%</span></div>
+                    </div>
+                    <div class="risk-bar"><div class="risk-fill low" id="risk-60-bar" style="width:0%"></div></div>
+                    <div class="risk-meta"><span class="risk-meta-label">置信度</span><span class="conf medium" id="conf-60">中</span></div>
+                </div>
+                <div class="risk-row">
+                    <div class="risk-header">
+                        <div class="risk-l"><span class="risk-t">120m</span><span class="risk-n">预约窗口</span></div>
+                        <div class="risk-metrics"><span class="badge low" id="risk-120-level">低</span><span class="risk-pct" id="risk-120-prob">--%</span></div>
+                    </div>
+                    <div class="risk-bar"><div class="risk-fill low" id="risk-120-bar" style="width:0%"></div></div>
+                    <div class="risk-meta"><span class="risk-meta-label">置信度</span><span class="conf low" id="conf-120">低</span></div>
+                </div>
+            </div>
+            <div class="motion-ft">
+                <i data-lucide="activity" style="width:12px;height:12px;"></i>光流一致性: <span id="motion-consistency">--</span>
+                <span class="info-tip">
+                    <i data-lucide="info" style="width:11px;height:11px;"></i>
+                    <span class="info-tip-text">光流一致性表示雷达回波运动方向的稳定程度，值越接近1说明云团运动越规律，预测越可靠。低于0.8时预测不确定性较大。</span>
+                </span>
+            </div>
+        </div>
+
+        <!-- 4: AI Summary + Suggestion (left card) -->
+        <div class="card g-ai-summary">
+            <div class="stitle"><span class="left"><i data-lucide="brain"></i>AI 诊断摘要</span><span class="conf medium" id="ai-confidence">中</span></div>
+            <div class="ai-hl" id="llm-headline">分析中...</div>
+            <div class="ai-kpi-row" id="ai-kpi-row">
+                <div class="ai-kpi status-kpi" id="ai-playability-card">
+                    <div class="ai-kpi-label"><i data-lucide="activity"></i>打球状态</div>
+                    <div class="ai-status-badge" id="ai-playability">
+                        <span class="ai-status-icon" id="ai-status-icon"><i data-lucide="loader"></i></span>
+                        <span class="ai-status-text">评估中</span>
+                    </div>
+                </div>
+                <div class="ai-kpi">
+                    <div class="ai-kpi-label"><i data-lucide="droplets"></i>场地状况</div>
+                    <div class="ai-kpi-value" id="ai-court-impact">--</div>
+                </div>
+            </div>
+            <div class="ai-suggest-box">
+                <div class="ai-suggest-label"><i data-lucide="lightbulb"></i>行动建议</div>
+                <div class="ai-suggest-text" id="ai-suggestion">AI 正在生成建议，请稍候。</div>
+            </div>
+            <!-- Data sources rendered inline, 2 columns -->
+            <div class="ds-section" id="ds-section" style="display:none;">
+                <div class="ds-divider"></div>
+                <div class="ds-header"><i data-lucide="database"></i>数据来源</div>
+                <div class="ds-grid" id="ds-grid"></div>
+            </div>
+        </div>
+
+        <!-- 5: Risk Assessment (right card) -->
+        <div class="card g-ai-risk">
+            <div class="stitle"><span class="left"><i data-lucide="alert-triangle"></i>风险评估</span></div>
+            <div class="ra-grid" id="ra-grid">
+                <div class="loading">加载中...</div>
+            </div>
+        </div>
+
+
+        <!-- 7: Radar Timeline Player -->
+        <div class="card g-radar">
+            <div class="stitle"><span class="left"><i data-lucide="radar"></i>雷达回波 (5km)</span><span class="radar-time" id="radar-current-time">--:--</span></div>
+            <div class="radar-wrap"><img id="radar-image" src="" alt="CAPPI Radar" loading="lazy"></div>
+            <div class="radar-controls" id="radar-controls">
+                <button class="radar-btn" id="radar-play-btn" title="播放/暂停"><i data-lucide="play"></i></button>
+                <div class="radar-timeline" id="radar-timeline"></div>
+            </div>
+        </div>
+
+        <!-- 8: Forecast — side-by-side -->
+        <div class="card g-forecast">
+            <div class="fc-split">
+                <div class="fc-left">
+                    <div class="stitle"><span class="left"><i data-lucide="clock"></i>逐小时预报</span></div>
+                    <div class="h-grid" id="hourly-forecast-container"><div class="loading">加载中...</div></div>
+                </div>
+                <div class="fc-divider"></div>
+                <div class="fc-right">
+                    <div class="stitle"><span class="left"><i data-lucide="calendar-days"></i>7天展望</span></div>
+                    <div class="week-grid" id="seven-day-container"><div class="loading">加载中...</div></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Footer -->
+    <footer class="footer">
+        <span>网球天气决策系统 — 数据源: SMG/广东雷达 & 格点插值</span>
+        <span>每30秒自动刷新 · DeepSeek AI 驱动诊断</span>
+    </footer>
+</div>
+<script src="js/app.js"></script>
+<script>lucide.createIcons();</script>
+</body>
+</html>

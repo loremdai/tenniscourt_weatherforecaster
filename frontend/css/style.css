@@ -1,0 +1,1012 @@
+@import url('https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600;700&family=Fira+Sans:wght@300;400;500;600;700&display=swap');
+
+/* ═══════════════════════════════════════════════════════════════
+   DESIGN SYSTEM: Tennis Weather Dashboard
+   Source: design-system/tennis-weather-dashboard/MASTER.md
+   Style: Dark Mode (OLED) + Bento Grid
+   Palette: Primary #1E40AF · Secondary #3B82F6 · CTA #F59E0B
+   Font: Fira Code (heading/mono) · Fira Sans (body)
+   Aesthetic: Bento Box — varied card sizes, rounded-xl, hover scale
+   ═══════════════════════════════════════════════════════════════ */
+
+:root {
+  --color-primary: #1E40AF;
+  --color-secondary: #3B82F6;
+  --color-cta: #F59E0B;
+  --color-bg: #0A0E1A;
+  --color-surface: #111827;
+  --color-surface-2: rgba(30,41,59,0.5);
+  --color-text: #F1F5F9;
+  --color-text-secondary: #94A3B8;
+  --color-text-muted: #64748B;
+  --green: #22C55E;
+  --amber: #F59E0B;
+  --red: #EF4444;
+  --cyan: #06B6D4;
+  --blue: #3B82F6;
+  --glow-green: 0 0 20px rgba(34,197,94,0.15);
+  --glow-amber: 0 0 20px rgba(245,158,11,0.15);
+  --glow-red: 0 0 20px rgba(239,68,68,0.15);
+  --space-xs: 4px; --space-sm: 8px; --space-md: 16px; --space-lg: 24px; --space-xl: 32px;
+  /* Typography scale — minor third (1.2x) */
+  --fs-2xs: 0.55rem; --fs-xs: 0.65rem; --fs-sm: 0.75rem; --fs-base: 0.85rem; --fs-md: 1.0rem; --fs-lg: 1.2rem; --fs-xl: 1.5rem;
+  --shadow-sm: 0 1px 3px rgba(0,0,0,0.2);
+  --shadow-md: 0 4px 14px rgba(0,0,0,0.25);
+  --shadow-lg: 0 10px 28px rgba(0,0,0,0.3);
+  --border: rgba(100,116,139,0.12);
+  --border-hover: rgba(100,116,139,0.3);
+  --radius: 20px;
+  --radius-sm: 12px;
+  --radius-xs: 8px;
+}
+
+/* ═══════ Reset ═══════ */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html { font-size: 17px; scroll-behavior: smooth; }
+body {
+  font-family: 'Fira Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+  background: var(--color-bg);
+  color: var(--color-text);
+  min-height: 100vh;
+  -webkit-font-smoothing: antialiased;
+  overflow-x: hidden;
+}
+body::before {
+  content: '';
+  position: fixed; inset: 0;
+  background:
+    radial-gradient(ellipse 60% 40% at 8% 4%, rgba(30,64,175,0.06) 0%, transparent 60%),
+    radial-gradient(ellipse 40% 30% at 92% 88%, rgba(6,182,212,0.03) 0%, transparent 60%);
+  pointer-events: none; z-index: 0;
+}
+
+/* ═══════ Container ═══════ */
+.dashboard { max-width: 1400px; margin: 0 auto; padding: var(--space-md) var(--space-lg) 48px; position: relative; z-index: 1; }
+
+/* ═══════ Header ═══════ */
+.header {
+  display: flex; justify-content: space-between; align-items: center;
+  flex-wrap: wrap; gap: var(--space-sm);
+  padding-bottom: var(--space-md); margin-bottom: var(--space-md);
+  border-bottom: 1px solid var(--border);
+}
+.header-title {
+  font-family: 'Fira Code', monospace; font-size: var(--fs-lg); font-weight: 700;
+  display: flex; align-items: center; gap: var(--space-sm);
+}
+.header-title svg { color: var(--color-secondary); filter: drop-shadow(0 0 8px rgba(59,130,246,0.25)); }
+
+/* Glassmorphic Location Badge */
+.location-badge {
+  display: inline-flex; align-items: center; gap: 8px;
+  margin-top: 6px; padding: 5px 14px 5px 8px;
+  background: rgba(255,255,255,0.04);
+  backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 20px;
+  transition: all 250ms ease-out;
+}
+.location-badge:hover {
+  background: rgba(255,255,255,0.07);
+  border-color: rgba(59,130,246,0.2);
+  box-shadow: 0 0 12px rgba(59,130,246,0.08);
+}
+.location-pin {
+  width: 26px; height: 26px; border-radius: 50%;
+  background: rgba(239,68,68,0.1);
+  display: flex; align-items: center; justify-content: center;
+  flex-shrink: 0;
+}
+.location-pin svg { width: 14px; height: 14px; color: #EF4444; }
+.location-name {
+  font-size: var(--fs-base); font-weight: 600; color: var(--color-text);
+  letter-spacing: 0.02em;
+}
+.location-coords {
+  font-family: 'Fira Code', monospace; font-size: var(--fs-xs);
+  color: var(--color-text-muted); letter-spacing: 0.03em;
+  padding-left: 6px; border-left: 1px solid var(--border);
+}
+.header-right { display: flex; align-items: center; gap: var(--space-sm); }
+.ntp-clock {
+  display: flex; align-items: center; gap: 4px;
+  font-family: 'Fira Code', monospace; font-size: var(--fs-base); font-weight: 600;
+  color: var(--cyan);
+  background: rgba(6,182,212,0.06); border: 1px solid rgba(6,182,212,0.15);
+  padding: 4px 12px; border-radius: 999px;
+}
+.ntp-clock svg { color: var(--cyan); }
+.ntp-colon {
+  animation: blink-colon 1s step-end infinite;
+  font-weight: 700;
+}
+@keyframes blink-colon {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
+}
+.update-time {
+  font-family: 'Fira Code', monospace; font-size: var(--fs-sm); font-weight: 500;
+  color: var(--color-text-muted);
+  background: var(--color-surface-2); border: 1px solid var(--border);
+  padding: 4px 12px; border-radius: 999px;
+}
+.live-badge {
+  display: flex; align-items: center; gap: 6px;
+  padding: 4px 12px;
+  background: rgba(34,197,94,0.06); border: 1px solid rgba(34,197,94,0.15); border-radius: 999px;
+  font-family: 'Fira Code', monospace; font-size: var(--fs-xs); color: var(--green);
+}
+.live-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--green); animation: pulse 2s ease-in-out infinite; }
+@keyframes pulse {
+  0%,100% { opacity:1; box-shadow: 0 0 0 0 rgba(34,197,94,0.4); }
+  50% { opacity:0.5; box-shadow: 0 0 0 5px rgba(34,197,94,0); }
+}
+
+/* ══════════════════════════════════════════════
+   BENTO GRID — 8 cards, asymmetric layout
+   ══════════════════════════════════════════════ */
+.grid {
+  display: grid; gap: var(--space-md);
+  grid-template-columns: 1fr;
+  grid-template-areas:
+    "hero"
+    "cond"
+    "risk"
+    "aisummary"
+    "airisk"
+    "forecast"
+    "radar";
+}
+
+@media (min-width: 768px) {
+  .grid {
+    grid-template-columns: 1fr 1fr;
+    grid-template-areas:
+      "hero      hero"
+      "cond      risk"
+      "aisummary airisk"
+      "forecast  forecast"
+      "radar     radar";
+  }
+}
+
+@media (min-width: 1100px) {
+  .grid {
+    grid-template-columns: 6fr 5fr;
+    grid-template-rows: auto auto auto auto auto;
+    grid-template-areas:
+      "hero      cond"
+      "hero      risk"
+      "aisummary airisk"
+      "forecast  forecast"
+      "radar     radar";
+  }
+}
+
+.g-hero       { grid-area: hero; }
+.g-cond       { grid-area: cond; display: flex; flex-direction: column; }
+.g-risk       { grid-area: risk; display: flex; flex-direction: column; }
+.g-ai-summary { grid-area: aisummary; }
+.g-ai-risk    { grid-area: airisk; display: flex; flex-direction: column; }
+.g-radar      { grid-area: radar; }
+.g-forecast   { grid-area: forecast; }
+
+/* ═══════ Card — Bento style ═══════ */
+.card {
+  background: var(--color-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: var(--space-md);
+  box-shadow: var(--shadow-md);
+  position: relative;
+  overflow: visible;
+  transition: border-color 200ms ease, box-shadow 250ms ease, transform 250ms ease;
+}
+.card:hover {
+  border-color: var(--border-hover);
+  box-shadow: var(--shadow-lg);
+  transform: translateY(-2px);
+}
+.card::before {
+  content: '';
+  position: absolute; top: 0; left: 0; right: 0; height: 1px;
+  background: linear-gradient(90deg, transparent 5%, rgba(255,255,255,0.04) 50%, transparent 95%);
+}
+
+/* ═══════ Section title ═══════ */
+.stitle {
+  font-family: 'Fira Code', monospace; font-size: var(--fs-sm); font-weight: 600;
+  display: flex; align-items: center; justify-content: space-between; gap: var(--space-sm);
+  margin-bottom: 10px;
+}
+.stitle .left { display: flex; align-items: center; gap: 6px; }
+.stitle svg { color: var(--color-text-muted); width: 15px; height: 15px; }
+.stitle a {
+  font-size: var(--fs-xs); color: var(--cyan); text-decoration: none;
+  transition: color 150ms; cursor: pointer;
+}
+.stitle a:hover { color: var(--blue); text-decoration: underline; }
+
+/* ═══════ Hero Card ═══════ */
+.g-hero { position: relative; display: flex; flex-direction: column; justify-content: flex-start; gap: 14px; }
+.g-hero .reasons { margin-top: 0; }
+.hero-bar {
+  position: absolute; top: 0; left: 0; width: 4px; height: 100%;
+  border-radius: 4px 0 0 4px; transition: width 200ms;
+}
+.g-hero:hover .hero-bar { width: 6px; }
+.hero-bar.good { background: linear-gradient(180deg, var(--green), rgba(34,197,94,0.15)); }
+.hero-bar.warn { background: linear-gradient(180deg, var(--amber), rgba(245,158,11,0.15)); }
+.hero-bar.bad  { background: linear-gradient(180deg, var(--red), rgba(239,68,68,0.15)); }
+
+.hero-title { margin-bottom: -2px; }
+.hero-inner { display: flex; justify-content: space-between; align-items: flex-start; gap: var(--space-md); padding-left: 14px; }
+.hero-tag {
+  font-family: 'Fira Code', monospace; font-size: var(--fs-xs);
+  text-transform: uppercase; letter-spacing: 0.1em; color: var(--color-text-muted); margin-bottom: 6px;
+}
+.hero-decision { font-size: var(--fs-lg); font-weight: 700; line-height: 1.35; margin-bottom: 6px; }
+.hero-window {
+  font-family: 'Fira Code', monospace; font-size: var(--fs-base);
+  color: var(--color-text-secondary); display: flex; align-items: center; gap: 5px;
+}
+.hero-recheck {
+  display: inline-flex; align-items: center; gap: 4px;
+  margin-top: 6px; padding: 2px 10px;
+  background: rgba(59,130,246,0.07); border: 1px solid rgba(59,130,246,0.18);
+  border-radius: 999px; font-family: 'Fira Code', monospace; font-size: var(--fs-xs); color: var(--blue);
+}
+.status-icon {
+  width: 50px; height: 50px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  background: var(--color-bg); border: 1px solid var(--border); flex-shrink: 0;
+  transition: box-shadow 400ms;
+}
+.status-icon.gl-green { box-shadow: var(--glow-green); }
+.status-icon.gl-amber { box-shadow: var(--glow-amber); }
+.status-icon.gl-red   { box-shadow: var(--glow-red); }
+
+/* Hero Extra — Rain Msg + Metrics Grid + Rain Chart */
+.hero-extra { display: flex; flex-direction: column; gap: 12px; }
+
+.rain-msg {
+  display: flex; align-items: center; gap: 6px;
+  padding: 6px 12px;
+  background: rgba(59,130,246,0.06); border: 1px solid rgba(59,130,246,0.12);
+  border-radius: var(--radius-xs);
+  font-family: 'Fira Code', monospace; font-size: var(--fs-xs); color: var(--blue);
+  line-height: 1.4;
+}
+.rain-msg.has-rain { background: rgba(245,158,11,0.06); border-color: rgba(245,158,11,0.15); color: var(--amber); }
+
+.hero-metrics-grid {
+  display: grid;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.hero-wx-card {
+  grid-column: span 6;
+  min-height: 116px;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px;
+  padding: 16px 18px;
+  background: rgba(15,23,42,0.58);
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(100,116,139,0.18);
+  transition: border-color 150ms, background 180ms, transform 180ms;
+  text-align: center;
+}
+.hero-wx-card:hover {
+  border-color: rgba(59,130,246,0.28);
+  background: rgba(30,41,59,0.62);
+  transform: translateY(-1px);
+}
+.hero-wx-label {
+  font-family: 'Fira Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+  font-size: var(--fs-base); font-weight: 700;
+  color: var(--color-text-muted);
+}
+.hero-wx-body { display: flex; align-items: center; justify-content: center; gap: 9px; }
+.hero-wx-icon { display: flex; align-items: center; }
+.hero-wx-icon .wx-icon { width: 30px; height: 30px; }
+.hero-wx-temps {
+  font-family: 'Fira Code', monospace; font-size: 1.42rem; font-weight: 700;
+  color: var(--color-text); line-height: 1;
+}
+.hero-wx-desc { font-size: var(--fs-base); font-weight: 500; color: var(--blue); }
+
+.hero-wx-card + .hero-wx-card {
+  grid-column: span 3;
+  min-height: 96px;
+  padding: 14px 16px;
+  gap: 6px;
+}
+.hero-wx-card + .hero-wx-card .hero-wx-label { font-size: var(--fs-sm); }
+.hero-wx-card + .hero-wx-card .hero-wx-icon .wx-icon { width: 24px; height: 24px; }
+.hero-wx-card + .hero-wx-card .hero-wx-temps { font-size: 1.12rem; }
+.hero-wx-card + .hero-wx-card .hero-wx-desc { font-size: var(--fs-sm); }
+
+.hero-kpi {
+  grid-column: span 4;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px;
+  padding: 10px 6px;
+  background: rgba(100,116,139,0.04); border-radius: var(--radius-xs);
+  border: 1px solid var(--border); text-align: center;
+}
+.kpi-ico { color: var(--color-text-muted); }
+.hero-kpi-val {
+  font-family: 'Fira Code', monospace; font-size: var(--fs-md); font-weight: 700;
+  color: var(--color-text); line-height: 1;
+}
+.hero-kpi-lbl {
+  font-family: 'Fira Code', monospace; font-size: var(--fs-2xs);
+  color: var(--color-text-muted); text-transform: uppercase; letter-spacing: 0.05em;
+}
+
+@media (max-width: 700px) {
+  .hero-wx-card { grid-column: span 12; }
+  .hero-wx-card + .hero-wx-card { grid-column: span 6; }
+  .hero-kpi { grid-column: span 4; }
+}
+
+@media (max-width: 460px) {
+  .hero-wx-card + .hero-wx-card { grid-column: span 12; }
+  .hero-kpi { grid-column: span 12; }
+}
+
+.hero-rain-chart {
+  --qpf-chart-h: clamp(58px, 7vw, 86px);
+  position: relative;
+  transition: margin 200ms ease;
+}
+.hero-rain-chart.qpf-flat { --qpf-chart-h: 48px; margin-top: -2px; }
+.hero-rain-chart.qpf-light { --qpf-chart-h: clamp(58px, 6vw, 72px); }
+.hero-rain-chart.qpf-active { --qpf-chart-h: clamp(76px, 8vw, 104px); }
+.qpf-svg {
+  width: 100%; height: var(--qpf-chart-h);
+  border-radius: 6px; background: transparent;
+  transition: height 220ms ease;
+}
+.rain-chart-times {
+  display: flex; justify-content: space-between;
+  font-family: 'Fira Code', monospace; font-size: var(--fs-2xs); color: var(--color-text-muted);
+  margin-top: 1px; padding: 0 2px; opacity: 0.6;
+}
+.hero-rain-chart.qpf-flat .rain-chart-times { opacity: 0.5; }
+
+.reasons { list-style: none; margin-top: 14px; padding-top: 0; border-top: 0; display: flex; flex-direction: column; gap: 4px; position: relative; z-index: 1; }
+.reason { display: flex; align-items: flex-start; gap: 6px; font-size: var(--fs-sm); color: var(--color-text-secondary); line-height: 1.45; padding: 2px 0; }
+.reason svg { flex-shrink: 0; margin-top: 2px; color: var(--color-text-muted); width: 14px; height: 14px; }
+.reason.caveat { color: var(--amber); }
+.reason.caveat svg { color: var(--amber); }
+
+/* ═══════ Conditions ═══════ */
+.cond-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: clamp(12px, 1.6vw, 20px);
+  margin-block: auto;
+}
+.cond-item {
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 12px;
+  background: var(--color-surface-2); border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  transition: border-color 200ms, transform 200ms;
+}
+.cond-item:hover { border-color: var(--border-hover); transform: translateY(-1px); }
+.cond-ico {
+  width: 36px; height: 36px; display: flex; align-items: center; justify-content: center;
+  border-radius: 8px; flex-shrink: 0;
+}
+.cond-ico svg { width: 18px; height: 18px; }
+/* Per-metric icon colors */
+.cond-item:nth-child(1) .cond-ico { background: rgba(245,158,11,0.1); color: #F59E0B; }
+.cond-item:nth-child(2) .cond-ico { background: rgba(59,130,246,0.1); color: #3B82F6; }
+.cond-item:nth-child(3) .cond-ico { background: rgba(20,184,166,0.1); color: #14B8A6; }
+.cond-item:nth-child(4) .cond-ico { background: rgba(250,204,21,0.1); color: #FACC15; }
+.cond-lbl { font-size: var(--fs-xs); color: var(--color-text-muted); text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 2px; }
+.cond-val { font-family: 'Fira Code', monospace; font-size: var(--fs-md); font-weight: 700; }
+.cond-val.sm { font-size: var(--fs-base); }
+
+/* ═══════ Risk Timeline ═══════ */
+.risk-timeline-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: auto;
+}
+.risk-row {
+  min-width: 0;
+  padding: 12px 14px;
+  background: rgba(15,23,42,0.48);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  border-top: 3px solid var(--green);
+  transition: border-color 200ms, background 200ms, transform 200ms;
+}
+.risk-row.med { border-top-color: var(--amber); }
+.risk-row.high { border-top-color: var(--red); }
+.risk-row:hover {
+  transform: translateY(-1px);
+  border-color: var(--border-hover);
+  background: rgba(30,41,59,0.58);
+}
+
+.risk-header {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 8px;
+  align-items: start;
+  margin-bottom: 12px;
+}
+.risk-l { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.risk-t {
+  font-family: 'Fira Code', monospace; font-size: var(--fs-xs); font-weight: 700;
+  color: var(--color-text-muted); line-height: 1;
+}
+.risk-n { font-size: var(--fs-base); font-weight: 700; color: var(--color-text); line-height: 1.25; }
+.risk-metrics { display: flex; flex-direction: column; align-items: flex-end; gap: 5px; }
+
+.risk-bar { width: 100%; height: 5px; background: rgba(100,116,139,0.14); border-radius: 999px; overflow: hidden; margin-bottom: 10px; }
+.risk-fill { height: 100%; border-radius: 2px; transition: width 0.8s cubic-bezier(0.4,0,0.2,1); position: relative; }
+.risk-fill.low { background: linear-gradient(90deg, var(--green), rgba(34,197,94,0.6)); }
+.risk-fill.med { background: linear-gradient(90deg, var(--amber), rgba(245,158,11,0.6)); }
+.risk-fill.high { background: linear-gradient(90deg, var(--red), rgba(239,68,68,0.6)); }
+
+.risk-meta { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.risk-meta-label { font-size: var(--fs-xs); color: var(--color-text-muted); }
+
+.badge {
+  font-family: 'Fira Code', monospace; font-size: var(--fs-2xs); font-weight: 700;
+  padding: 1px 6px; border-radius: 4px; text-transform: uppercase; letter-spacing: 0.03em;
+}
+.badge.low  { background: rgba(34,197,94,0.1); color: var(--green); border: 1px solid rgba(34,197,94,0.18); }
+.badge.med  { background: rgba(245,158,11,0.1); color: var(--amber); border: 1px solid rgba(245,158,11,0.18); }
+.badge.high { background: rgba(239,68,68,0.1); color: var(--red); border: 1px solid rgba(239,68,68,0.18); }
+
+.conf { font-family: 'Fira Code', monospace; font-size: var(--fs-2xs); padding: 1px 5px; border-radius: 3px; text-transform: uppercase; }
+.conf.high   { background: rgba(34,197,94,0.07); color: var(--green); }
+.conf.medium { background: rgba(245,158,11,0.07); color: var(--amber); }
+.conf.low    { background: rgba(239,68,68,0.07); color: var(--red); }
+
+.risk-pct {
+  font-family: 'Fira Code', monospace; font-size: var(--fs-lg); font-weight: 700;
+  min-width: 42px; text-align: right; color: var(--color-text);
+}
+
+.motion-ft {
+  display: flex; align-items: center; justify-content: center; gap: 6px;
+  font-family: 'Fira Code', monospace; font-size: var(--fs-xs); color: var(--color-text-muted);
+  padding: 9px 12px; margin-top: 10px;
+  background: rgba(255,255,255,0.025);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xs);
+  margin-bottom: auto;
+}
+.motion-ft span { color: var(--color-text-secondary); font-weight: 500; }
+
+@media (max-width: 900px) {
+  .risk-timeline-grid { grid-template-columns: 1fr; }
+  .risk-header { align-items: center; }
+  .risk-l { flex-direction: row; align-items: baseline; gap: 8px; }
+  .risk-metrics { flex-direction: row; align-items: center; }
+}
+
+/* Info Tooltip */
+.info-tip {
+  position: relative; display: inline-flex; align-items: center;
+  color: var(--color-text-muted); cursor: help;
+  margin-left: 2px;
+  transition: color 150ms;
+}
+.info-tip:hover { color: var(--cyan); }
+.info-tip-text {
+  display: none; position: absolute; bottom: calc(100% + 8px); right: -8px;
+  width: 220px; padding: 10px 12px;
+  background: var(--color-surface-3); border: 1px solid var(--border-hover);
+  border-radius: var(--radius-xs); box-shadow: var(--shadow-md);
+  font-family: 'Fira Code', monospace; font-size: var(--fs-2xs); font-weight: 400;
+  color: var(--color-text-secondary); line-height: 1.55;
+  z-index: 100; pointer-events: none;
+}
+.info-tip-text::after {
+  content: ''; position: absolute; top: 100%; right: 12px;
+  border: 5px solid transparent; border-top-color: var(--border-hover);
+}
+.info-tip:hover .info-tip-text { display: block; animation: fadeUp 0.15s ease-out; }
+
+/* ═══════════════════════════════════════
+   AI Diagnosis — 3 separate cards
+   ═══════════════════════════════════════ */
+
+/* Card 4: AI Summary */
+.ai-hl {
+  font-size: var(--fs-base); font-weight: 500; line-height: 1.55; margin-bottom: 16px;
+  padding: 12px 16px;
+  background: linear-gradient(135deg, rgba(34,197,94,0.05), rgba(6,182,212,0.03));
+  border-left: 3px solid var(--green); border-radius: 0 var(--radius-xs) var(--radius-xs) 0;
+  color: var(--green);
+}
+.ai-kpi-row {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 16px;
+}
+@media (max-width: 480px) { .ai-kpi-row { grid-template-columns: 1fr; } }
+
+.ai-kpi {
+  padding: 14px 16px;
+  background: var(--color-surface-2); border-radius: var(--radius-sm); border: 1px solid var(--border);
+}
+.ai-kpi-label {
+  font-size: var(--fs-xs); color: var(--color-text-muted); text-transform: uppercase;
+  letter-spacing: 0.05em; margin-bottom: 6px; display: flex; align-items: center; gap: 5px;
+}
+.ai-kpi-label svg { width: 13px; height: 13px; }
+.ai-kpi-value {
+  font-size: var(--fs-base); color: var(--color-text); line-height: 1.55;
+}
+
+/* Playability Status Badge */
+.status-kpi { border-left: 3px solid var(--color-text-muted); }
+.status-kpi.status-good { border-left-color: var(--green); }
+.status-kpi.status-warn { border-left-color: var(--amber); }
+.status-kpi.status-bad  { border-left-color: var(--red); }
+.status-kpi.status-danger { border-left-color: var(--red); }
+
+.ai-status-badge {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+}
+.ai-status-icon {
+  width: 28px; height: 28px; border-radius: 8px;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(255,255,255,0.05); flex-shrink: 0;
+}
+.ai-status-icon svg { width: 16px; height: 16px; }
+.status-good .ai-status-icon { background: rgba(34,197,94,0.12); color: var(--green); }
+.status-warn .ai-status-icon { background: rgba(245,158,11,0.12); color: var(--amber); }
+.status-bad .ai-status-icon  { background: rgba(239,68,68,0.12); color: var(--red); }
+.status-danger .ai-status-icon { background: rgba(239,68,68,0.15); color: var(--red); }
+
+.ai-status-text {
+  font-size: var(--fs-base); font-weight: 700; letter-spacing: 0.02em;
+}
+.status-good .ai-status-text { color: var(--green); }
+.status-warn .ai-status-text { color: var(--amber); }
+.status-bad .ai-status-text  { color: var(--red); }
+.status-danger .ai-status-text { color: var(--red); }
+
+.ai-status-desc {
+  font-size: var(--fs-xs); color: var(--color-text-muted);
+  width: 100%; margin-top: -2px; padding-left: 36px;
+}
+.ai-suggest-box {
+  padding: 14px 16px;
+  background: var(--color-surface-2); border-radius: var(--radius-sm); border: 1px solid var(--border);
+}
+.ai-suggest-label {
+  font-family: 'Fira Code', monospace; font-size: var(--fs-xs); font-weight: 600;
+  color: var(--color-text-muted); text-transform: uppercase; letter-spacing: 0.05em;
+  margin-bottom: 8px; display: flex; align-items: center; gap: 5px;
+}
+.ai-suggest-label svg { width: 13px; height: 13px; color: var(--amber); }
+.ai-suggest-text {
+  font-size: var(--fs-base); line-height: 1.7; color: var(--color-text-secondary);
+}
+
+/* Card 5: Risk Assessment */
+.g-ai-risk > .stitle { flex-shrink: 0; }
+.ra-grid { display: flex; flex-direction: column; gap: 10px; flex: 1; min-height: 0; }
+.g-ai-risk .motion-ft { flex-shrink: 0; }
+
+.ra-overview {
+  display: grid; grid-template-columns: 44px 1fr; gap: 12px; align-items: start;
+  padding: 14px 16px;
+  background: linear-gradient(135deg, rgba(255,255,255,0.055), rgba(255,255,255,0.018));
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  position: relative; overflow: hidden;
+}
+.ra-overview::before {
+  content: ''; position: absolute; inset: 0 auto 0 0; width: 3px;
+  background: var(--green);
+}
+.ra-overview.medium::before { background: var(--amber); }
+.ra-overview.high::before { background: var(--red); }
+.ra-overview-icon {
+  width: 44px; height: 44px; border-radius: 12px;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(34,197,94,0.1); color: var(--green);
+  border: 1px solid rgba(34,197,94,0.18);
+}
+.ra-overview.medium .ra-overview-icon { background: rgba(245,158,11,0.1); color: var(--amber); border-color: rgba(245,158,11,0.2); }
+.ra-overview.high .ra-overview-icon { background: rgba(239,68,68,0.1); color: var(--red); border-color: rgba(239,68,68,0.2); }
+.ra-overview-icon svg { width: 22px; height: 22px; }
+.ra-overview-copy { min-width: 0; }
+.ra-overview-label {
+  display: block; margin-bottom: 3px;
+  font-family: 'Fira Code', monospace; font-size: var(--fs-2xs); font-weight: 600;
+  color: var(--color-text-muted); text-transform: uppercase;
+}
+.ra-overview-copy strong {
+  display: block; font-size: var(--fs-md); line-height: 1.35; color: var(--color-text);
+}
+.ra-overview-copy p {
+  margin-top: 6px; color: var(--color-text-secondary); font-size: var(--fs-base);
+  line-height: 1.6;
+}
+
+.ra-primary {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-rows: repeat(2, minmax(min-content, 1fr));
+  gap: 10px;
+  flex: 1;
+  min-height: 0;
+}
+.ra-risk-card {
+  min-width: 0; min-height: 0;
+  display: flex; flex-direction: column;
+  padding: 12px 14px;
+  background: rgba(15,23,42,0.48);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  transition: border-color 180ms ease, background 180ms ease, transform 180ms ease;
+}
+.ra-risk-card:hover {
+  border-color: var(--border-hover);
+  background: rgba(30,41,59,0.58);
+  transform: translateY(-1px);
+}
+.ra-risk-top,
+.ra-risk-main {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+}
+.ra-risk-main { justify-content: flex-start; margin-top: 8px; }
+.ra-window {
+  font-family: 'Fira Code', monospace; font-size: var(--fs-xs); font-weight: 700;
+  color: var(--color-text-muted);
+}
+.ra-level {
+  flex-shrink: 0;
+  font-family: 'Fira Code', monospace; font-size: var(--fs-2xs); font-weight: 700;
+  padding: 2px 7px; border-radius: 999px;
+  border: 1px solid rgba(34,197,94,0.2);
+  background: rgba(34,197,94,0.09); color: var(--green);
+  white-space: nowrap;
+}
+.ra-level.medium { border-color: rgba(245,158,11,0.22); background: rgba(245,158,11,0.1); color: var(--amber); }
+.ra-level.high { border-color: rgba(239,68,68,0.22); background: rgba(239,68,68,0.1); color: var(--red); }
+.ra-risk-icon {
+  width: 32px; height: 32px; border-radius: 9px;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: rgba(34,197,94,0.1); color: var(--green);
+}
+.ra-risk-card.medium .ra-risk-icon { background: rgba(245,158,11,0.1); color: var(--amber); }
+.ra-risk-card.high .ra-risk-icon { background: rgba(239,68,68,0.1); color: var(--red); }
+.ra-risk-icon svg { width: 17px; height: 17px; }
+.ra-risk-name {
+  min-width: 0;
+  color: var(--color-text); font-size: var(--fs-base); font-weight: 700;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.ra-meter {
+  height: 4px; margin: 10px 0 9px;
+  background: rgba(100,116,139,0.16);
+  border-radius: 999px; overflow: hidden;
+}
+.ra-meter span {
+  display: block; height: 100%; border-radius: inherit;
+  background: linear-gradient(90deg, var(--green), rgba(34,197,94,0.55));
+}
+.ra-meter span.medium { background: linear-gradient(90deg, var(--amber), rgba(245,158,11,0.58)); }
+.ra-meter span.high { background: linear-gradient(90deg, var(--red), rgba(239,68,68,0.58)); }
+.ra-risk-reason {
+  flex: 1;
+  color: var(--color-text-muted); font-size: var(--fs-sm); line-height: 1.5;
+  display: block;
+  overflow: visible;
+}
+
+.ra-extras {
+  display: flex; flex-direction: column; gap: 6px;
+  padding-top: 2px;
+}
+.ra-extra {
+  display: grid; grid-template-columns: 32px minmax(0, 1fr) auto; gap: 10px; align-items: start;
+  padding: 10px 12px;
+  background: rgba(255,255,255,0.025);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xs);
+  transition: border-color 180ms ease, background 180ms ease;
+}
+.ra-extra:hover { border-color: var(--border-hover); background: rgba(255,255,255,0.04); }
+.ra-extra-icon {
+  width: 32px; height: 32px; border-radius: 9px;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(34,197,94,0.08); color: var(--green);
+}
+.ra-extra.medium .ra-extra-icon { background: rgba(245,158,11,0.08); color: var(--amber); }
+.ra-extra.high .ra-extra-icon { background: rgba(239,68,68,0.08); color: var(--red); }
+.ra-extra-icon svg { width: 17px; height: 17px; }
+.ra-extra-copy { min-width: 0; display: flex; flex-direction: column; gap: 8px; }
+.ra-extra-title { color: var(--color-text); font-size: var(--fs-sm); font-weight: 700; line-height: 1.3; }
+.ra-extra-reason {
+  color: var(--color-text-muted); font-size: var(--fs-sm); line-height: 1.45;
+  white-space: normal; overflow: visible; text-overflow: clip;
+}
+
+@media (max-width: 520px) {
+  .ra-primary { grid-template-columns: 1fr; grid-template-rows: none; flex: 0 0 auto; }
+  .ra-risk-card { min-height: 0; }
+  .ra-extra { grid-template-columns: 32px minmax(0, 1fr); }
+  .ra-extra .ra-level { grid-column: 2; justify-self: start; }
+}
+
+/* Card 6 → now inline inside AI Summary */
+.ds-section { margin-top: var(--space-md); }
+.ds-divider { height: 1px; background: var(--border); margin-bottom: var(--space-md); }
+.ds-header {
+  font-family: 'Fira Code', monospace; font-size: var(--fs-sm); font-weight: 600;
+  color: var(--color-text-muted); margin-bottom: 10px;
+  display: flex; align-items: center; gap: 5px;
+  text-transform: uppercase; letter-spacing: 0.04em;
+}
+.ds-header svg { width: 13px; height: 13px; }
+
+.ds-grid {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 10px;
+}
+@media (max-width: 600px) { .ds-grid { grid-template-columns: 1fr; } }
+
+.ds-item {
+  padding: 12px 14px;
+  background: var(--color-surface-2); border-radius: var(--radius-sm); border: 1px solid var(--border);
+  transition: border-color 200ms;
+}
+.ds-item:hover { border-color: var(--border-hover); }
+.ds-label {
+  font-family: 'Fira Code', monospace; font-size: var(--fs-xs); font-weight: 600;
+  color: var(--color-text-muted); text-transform: uppercase; letter-spacing: 0.04em;
+  margin-bottom: 6px; display: flex; align-items: center; gap: 5px;
+}
+.ds-label svg { width: 13px; height: 13px; }
+.ds-text {
+  font-size: var(--fs-base); color: var(--color-text-secondary); line-height: 1.6;
+  display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.ds-chips { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 8px; }
+.ds-chip {
+  display: inline-flex; align-items: center; gap: 0;
+  font-family: 'Fira Code', monospace; font-size: var(--fs-2xs);
+  border-radius: 4px; overflow: hidden;
+  border: 1px solid var(--border);
+}
+.ds-chip-ico { width: 10px !important; height: 10px !important; margin-left: 5px; color: var(--color-text-muted); flex-shrink: 0; }
+.ds-chip-k {
+  padding: 2px 6px; background: rgba(255,255,255,0.04);
+  color: var(--color-text-muted); font-weight: 500;
+}
+.ds-chip-v {
+  padding: 2px 6px; background: rgba(59,130,246,0.06);
+  color: var(--color-text-secondary); font-weight: 600;
+}
+.ds-chip-v.good { color: var(--green); background: rgba(34,197,94,0.08); }
+.ds-chip-v.warn { color: var(--amber); background: rgba(245,158,11,0.08); }
+.ds-chip-v.bad  { color: var(--red);   background: rgba(239,68,68,0.08); }
+
+/* ═══════ Radar Timeline Player ═══════ */
+.radar-time {
+  font-family: 'Fira Code', monospace; font-size: var(--fs-sm); font-weight: 600;
+  color: var(--blue); background: rgba(59,130,246,0.1);
+  padding: 3px 12px; border-radius: 6px;
+  letter-spacing: 0.5px;
+  animation: radar-time-pulse 3s ease-in-out infinite;
+}
+@keyframes radar-time-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.7; }
+}
+.radar-wrap {
+  aspect-ratio: 16 / 9;
+  border-radius: var(--radius-sm); overflow: hidden;
+  border: 1px solid var(--border);
+  background: #050a14;
+  display: flex; align-items: center; justify-content: center;
+  min-height: clamp(180px, 28vw, 320px); position: relative;
+  box-shadow: inset 0 0 30px rgba(0,0,0,0.5);
+}
+.radar-wrap::after {
+  content: ''; position: absolute; inset: 0;
+  border-radius: inherit; pointer-events: none;
+  box-shadow: inset 0 0 20px rgba(59,130,246,0.05);
+  transition: box-shadow 300ms;
+}
+.radar-wrap:hover::after {
+  box-shadow: inset 0 0 30px rgba(59,130,246,0.1);
+}
+.radar-wrap img {
+  width: 100%; height: 100%; object-fit: cover;
+  transition: opacity 150ms ease-out;
+}
+
+.radar-controls {
+  display: flex; align-items: center; gap: 8px;
+  margin-top: 10px; padding: 8px 10px;
+  background: var(--color-surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  backdrop-filter: blur(8px);
+}
+.radar-btn {
+  width: 34px; height: 34px; border-radius: 8px;
+  background: var(--color-surface-3); border: 1px solid var(--border);
+  color: var(--color-text-secondary); cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  transition: all 200ms ease-out; flex-shrink: 0;
+}
+.radar-btn:hover {
+  background: rgba(59,130,246,0.1); border-color: rgba(59,130,246,0.3);
+  color: var(--blue); transform: scale(1.05);
+}
+.radar-btn:active { transform: scale(0.95); }
+.radar-btn svg { width: 14px; height: 14px; }
+
+.radar-timeline {
+  display: flex; align-items: center; gap: 0; flex: 1;
+  position: relative; padding: 6px 4px;
+}
+/* Track line connecting dots */
+.radar-timeline::before {
+  content: ''; position: absolute;
+  top: 50%; left: 20px; right: 20px;
+  height: 2px; background: var(--border);
+  transform: translateY(-4px); border-radius: 1px;
+  z-index: 0;
+}
+
+.radar-dot {
+  flex: 1; display: flex; flex-direction: column; align-items: center; gap: 4px;
+  background: none; border: none; cursor: pointer; padding: 4px 2px;
+  transition: all 200ms ease-out; border-radius: 8px;
+  position: relative; z-index: 1;
+}
+.radar-dot:hover { background: rgba(59,130,246,0.06); }
+
+.radar-dot-pip {
+  width: 10px; height: 10px; border-radius: 50%;
+  background: var(--color-surface-3); border: 2px solid var(--color-text-muted);
+  transition: all 250ms ease-out;
+  display: block; box-sizing: border-box;
+}
+.radar-dot:hover .radar-dot-pip {
+  border-color: var(--color-text-secondary);
+  transform: scale(1.15);
+}
+.radar-dot.active .radar-dot-pip {
+  background: var(--blue); border-color: var(--blue);
+  box-shadow: 0 0 10px rgba(59,130,246,0.6), 0 0 20px rgba(59,130,246,0.2);
+  transform: scale(1.3);
+}
+
+.radar-dot-label {
+  font-family: 'Fira Code', monospace; font-size: var(--fs-2xs);
+  color: var(--color-text-muted); transition: all 200ms;
+  white-space: nowrap;
+}
+.radar-dot:hover .radar-dot-label { color: var(--color-text-secondary); }
+.radar-dot.active .radar-dot-label {
+  color: var(--blue); font-weight: 700;
+  text-shadow: 0 0 8px rgba(59,130,246,0.3);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .radar-time { animation: none; }
+  .radar-dot-pip, .radar-dot-label { transition: none; }
+  .radar-wrap img { transition: none; }
+}
+
+/* ═══════ Forecast Split Layout ═══════ */
+.fc-split {
+  display: flex; gap: 0; align-items: stretch;
+}
+.fc-left { flex: 3; min-width: 0; }
+.fc-right { flex: 2; min-width: 0; }
+.fc-divider {
+  width: 1px; background: var(--border);
+  margin: 0 var(--space-md); flex-shrink: 0;
+}
+@media (max-width: 768px) {
+  .fc-split { flex-direction: column; }
+  .fc-divider { width: 100%; height: 1px; margin: var(--space-sm) 0; }
+}
+
+/* Hourly — wrapping grid (2 rows) */
+.h-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(118px, 1fr));
+  gap: 12px;
+}
+.h-card {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  padding: 10px 6px 8px;
+  background: var(--color-surface-2); border-radius: var(--radius-xs); border: 1px solid var(--border);
+  text-align: center; transition: border-color 150ms, transform 200ms; cursor: default;
+}
+.h-card:hover { border-color: var(--border-hover); transform: translateY(-1px); }
+.h-card.rain { border-color: rgba(59,130,246,0.2); background: rgba(59,130,246,0.04); }
+.h-time { font-family: 'Fira Code', monospace; font-size: var(--fs-sm); color: var(--color-text-muted); margin-bottom: 4px; }
+.h-icon { display: flex; align-items: center; justify-content: center; margin-bottom: 2px; }
+.h-icon .wx-icon { width: 28px; height: 28px; }
+
+/* Weather icon colors */
+.wx-sunny   { color: #F59E0B; }
+.wx-partly  { color: #60A5FA; }
+.wx-overcast { color: #94A3B8; }
+.wx-drizzle { color: #7DD3FC; }
+.wx-rain    { color: #3B82F6; }
+.wx-storm   { color: #A78BFA; }
+.wx-snow    { color: #67E8F9; }
+.wx-fog     { color: #64748B; }
+.h-temp { font-family: 'Fira Code', monospace; font-size: var(--fs-lg); font-weight: 700; margin-bottom: 3px; }
+.h-wx { font-size: var(--fs-sm); color: var(--color-text-secondary); }
+.h-wx.rain-t { color: var(--blue); }
+.h-wind { font-size: var(--fs-xs); color: var(--color-text-muted); margin-top: 3px; }
+
+/* 7-Day — compact vertical list */
+.week-grid {
+  display: flex; flex-direction: column; gap: 4px;
+}
+.d-card {
+  display: flex; align-items: center; gap: 10px;
+  padding: 6px 10px;
+  background: var(--color-surface-2); border-radius: var(--radius-xs);
+  border: 1px solid var(--border);
+  transition: border-color 150ms, transform 200ms; cursor: default;
+}
+.d-card.today { border-color: rgba(59,130,246,0.25); background: rgba(59,130,246,0.04); }
+.d-card:hover { border-color: var(--border-hover); transform: translateX(2px); }
+.d-date { font-family: 'Fira Code', monospace; font-size: var(--fs-xs); color: var(--color-text-muted); min-width: 40px; }
+.d-label { font-size: var(--fs-sm); font-weight: 600; color: var(--color-text-secondary); min-width: 44px; }
+.d-icon { display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+.d-icon .wx-icon { width: 22px; height: 22px; }
+.d-wx { font-size: var(--fs-sm); color: var(--color-text-secondary); flex: 1; }
+.d-temps { font-family: 'Fira Code', monospace; font-size: var(--fs-sm); font-weight: 600; margin-left: auto; white-space: nowrap; }
+.t-hi { color: var(--amber); }
+.t-lo { color: var(--blue); }
+
+/* ═══════ Footer ═══════ */
+.footer {
+  margin-top: var(--space-lg); padding-top: var(--space-md); border-top: 1px solid var(--border);
+  text-align: center; font-size: var(--fs-xs); color: var(--color-text-muted); display: flex; flex-direction: column; gap: 2px;
+}
+
+/* ═══════ Utility ═══════ */
+.loading { color: var(--color-text-muted); font-style: italic; font-size: var(--fs-sm); }
+
+/* Staggered entrance */
+@keyframes fadeUp { from { opacity:0; transform:translateY(8px); } to { opacity:1; transform:translateY(0); } }
+.card { animation: fadeUp 0.35s ease-out both; }
+.card:nth-child(2) { animation-delay: .04s; }
+.card:nth-child(3) { animation-delay: .08s; }
+.card:nth-child(4) { animation-delay: .12s; }
+.card:nth-child(5) { animation-delay: .16s; }
+.card:nth-child(6) { animation-delay: .20s; }
+.card:nth-child(7) { animation-delay: .24s; }
+.card:nth-child(8) { animation-delay: .28s; }
+.card:nth-child(9) { animation-delay: .32s; }
+
+/* ═══════ Focus States (keyboard a11y) ═══════ */
+:focus-visible {
+  outline: 2px solid var(--blue);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+button:focus-visible, .radar-dot:focus-visible {
+  box-shadow: 0 0 0 3px rgba(59,130,246,0.3);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+}

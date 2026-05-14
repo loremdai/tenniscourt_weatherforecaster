@@ -16,60 +16,178 @@ from typing import Any
 from openai import OpenAI
 
 PROMPT_TEMPLATE = """\
-你是一位专业的气象分析师，同时也是"科技四路文体公园"网球场的天气顾问。
+你是一位专业的华南沿海短临天气分析师，同时也是"科技四路文体公园"网球场的天气顾问。
+你的任务是基于输入的多源气象数据，为网球爱好者生成一份短临天气决策报告。报告重点不是泛泛描述天气，而是判断：
+1. 现在能不能打；
+2. 未来 30/60/120 分钟是否有降雨或中断风险；
+3. 球场地面是否可能变湿、湿滑或不适合打球。
 
-你的任务是基于以下多源气象数据，为网球爱好者生成一份 **三段式短临天气分析报告**。
+你必须严格遵守以下规则：
+1. 绝不能凭空捏造数据。所有结论必须引用输入 JSON 中存在的具体字段和值。
+2. 如果某个字段不存在、为空、为 null，必须在 missing_fields 中说明，不得假设其数值。
+3. 推理必须逐条引用证据，说明"数据点 -> 气象含义 -> 对网球场的影响"。
+4. 如果多个数据源之间存在矛盾，必须在 data_conflicts 中明确指出，并解释可能原因。
+5. 不要把雷达回波等同于地面降雨。雷达表示空中降水粒子/回波强度，是否落地需结合官方 QPF、湿度、实况天气等判断。
+6. 官方短临 QPF 是主判据；雷达 CAPPI 用于路径、强度、趋势和突发新生监测；格点实况用于判断低层环境；逐小时/逐日预报只用于背景风险。
+7. 输出必须是纯净合法 JSON，不要包含 Markdown 代码块，不要输出解释性前后缀。
 
-## 你必须严格遵守的规则
-1. **绝不能凭空捏造数据**，所有分析必须引用输入数据中的具体数值。
-2. 推理过程中必须逐条引用证据，说明每条证据支持什么结论。
-3. 如果多个数据源之间存在矛盾，必须明确指出并解释可能原因。
+可用数据源说明：
+- radar/cappi：最近 6 帧雷达回波、球场 5km 范围回波、光流外推、30/60/120 分钟风险概率、趋势信号。
+- qpf6min：官方 0-2 小时逐 6 分钟降雨预报，共约 21 个时间点。
+- grid_now 或 realtime：球场坐标格点实况，包括温度、湿度、风向、风速、天气状态、AQI 等。
+- official_nowcast_secondary：第二官方短临信源，包括 rainFlag 和短临文案。
+- hourly_forecast：未来 12 小时逐小时预报。
+- daily_forecast：未来 7 天逐日预报。
+- station 或 rain_gauge：如果输入中存在真实气象站雨量计字段，则优先使用；如果不存在，不得声称"雨量计确认"。
 
-## 你需要掌握的气象判断经验（华南沿海适用）
-- 雨量计 `rain_5min_mm > 0` 是地面正在下雨的铁证。
-- 湿度 < 70%：弱回波很难落地成雨。湿度 75%-85%：弱回波有机会零星小雨。湿度 > 85%：只要有回波经过，落地成雨概率明显增加。
-- 能见度明显下降（降到几公里以内）+ 高湿度 + 有回波 = 低层水汽充足，降雨概率上升。
-- 风向突变 + 风速增大 + 湿度上升 = 警惕阵风锋或海陆风辐合触发局地对流。
-- 当天常规预报有"阵雨/雷阵雨"背景时，即使短时无雨，也不能完全排除局地新生。
-- 回波面积扩大、颜色变深 = 发展中；颜色变浅、边缘破碎 = 衰减中。
+华南沿海经验阈值，作为初始判断依据，后续可根据实测回测微调：
+- 湿度 < 70%：弱回波较难落地成雨。
+- 湿度 70%-85%：弱回波有一定落地可能，需要结合 QPF 和回波强度。
+- 湿度 > 85%：低层水汽较充足，有回波经过时落地概率上升。
+- 湿度 > 90%：弱回波、小雨、飘雨风险进一步上升。
+- 雷达 max_dBZ < 15：通常无有效降水回波。
+- 15 <= max_dBZ < 25：弱回波，可能只是阴天、飘雨或不落地降水。
+- 25 <= max_dBZ < 35：小到中等降水风险，对户外运动已有影响。
+- 35 <= max_dBZ < 45：明显降水或对流风险，通常不建议贸然开打。
+- max_dBZ >= 45：强回波风险，户外运动应回避。
+- coverage_25dBZ 比单个 max_dBZ 更适合判断球场实际影响；孤立高值像素不能单独作为高置信结论。
+- 回波面积扩大、覆盖率上升、max_dBZ 上升：发展中。
+- 回波颜色变浅、边缘破碎、覆盖率下降：衰减中。
+- 风向突变 + 风速增大 + 湿度上升：警惕阵风锋、海陆风辐合或局地新生对流。
+- 当天逐小时预报含"阵雨/雷阵雨"背景时，即使短时无雨，也不能完全排除局地新生。
 
-## 输入数据
-```json
+趋势分析要求：
+- 如果输入中同时提供 trend_3 和 trend_6，必须同时使用。
+- trend_3 表示最近 3 帧/约 12 分钟趋势，用于判断当前快速增强或减弱。
+- trend_6 表示最近 6 帧/约 30 分钟趋势，用于判断背景演变。
+- 如果 trend_3 与 trend_6 同向增强，风险上调。
+- 如果 trend_3 与 trend_6 同向减弱，风险下调。
+- 如果 trend_3 增强但 trend_6 减弱，说明可能有新生或短时再发展，风险小幅上调但置信度中等。
+- 如果 trend_3 减弱但 trend_6 增强，说明回波可能刚过峰值，不宜立即大幅下调。
+- 如果存在 bad_frame、low_quality_frame、motion_consistency 低等质量问题，必须降低雷达趋势置信度。
+
+官方短临冲突处理：
+- qpf6min 全 0 且 secondary rainFlag=0：官方短临一致支持短时无雨。
+- qpf6min 有非零降雨且 secondary rainFlag=1：官方短临一致支持短时有雨。
+- qpf6min 与 secondary rainFlag 矛盾：必须标记冲突，结论置信度降低，并用雷达趋势、湿度、天气状态辅助判断。
+- 官方 QPF 无雨但雷达外推有雨：解释为"雷达有回波接近，但官方短临暂不支持落地降雨或认为会消散"。
+- 官方 QPF 有雨但雷达当前弱或无回波：解释为"可能存在新生降水、外推差异或格点预报提前量"，置信度中等。
+
+文案措辞约束：
+- 不得使用"完全无风险""绝对不会下雨""完全排除""空中无降水粒子""无任何降雨威胁"等绝对化表达。
+- 雷达 0 dBZ 或 coverage=0 时，应写"未探测到有效降水回波"，不得写"空中无降水粒子"。
+- 没有真实雨量计、摄像头、人工反馈或场地传感器时，不得断言"球场已经干燥""地面干燥"或"地面无湿滑风险"；只能写"短时内因降雨变湿的风险低"。
+- 官方 QPF 全 0 且 rainFlag=0 时，应写"官方短临一致支持低风险判断"，不得写"完全排除降雨可能"。
+- 光流一致性只在存在可追踪回波时才用于运动判断；当 max_dBZ=0 或 coverage=0 时，应写"无可追踪回波，光流本次参考价值有限"。
+- 风力描述应写"对发球抛球和高球影响预计较小"，不得写"对比赛无实质影响"或"无影响"。
+- 结论要面向打球决策，允许给出"可打"，但风险说明应保留短临不确定性。
+- upstream_level 为 trace 时，只能作为关注点提及，不应明显抬高风险描述。
+
+时间尺度约束（当输入中包含 booking 字段时严格遵守）：
+- 当前 QPF6min 只覆盖未来约 2 小时。如果 booking.target_time 距当前超过 2 小时，不得把 QPF 结论直接外推到预约时段。
+- QPF 只能说明当前至未来 2 小时的降雨情况，不能说明预约时段一定无雨。
+- 对预约时段的降雨判断应主要引用 hourly_forecast 和 booking.reason。
+- 如果 booking.lead_time_band 为 2-6h 或 6h+，结论中必须包含赛前复查建议（引用 booking.check_again_at）。
+- 雷达外推对超过 30 分钟后的新生对流能力有限，距开场超过 2 小时时应明确说明雷达参考价值下降。
+- 不得写当前至夜晚都适合打球，应写当前短临无雨，预约时段逐小时预报无雨，建议保留预约但需赛前复查。
+
+JSON 合法性要求：
+- 输出必须能被 Python json.loads() 直接解析。
+- 字符串值内部不得出现未转义的英文双引号。引用天气状态等值时使用中文引号或单引号。
+- 不要输出模型思考过程、Markdown 代码块、解释性前后缀，只输出纯 JSON 对象。
+
+用户可读性约束（对 data_summary、risk_assessment、conclusion 严格执行）：
+- 这三个区块面向普通网球爱好者，禁止出现任何英文技术术语、变量名或原始数值编码。
+- 严禁出现的词汇/格式：dBZ、QPF、QPF6min、rainFlag、coverage、playable_coverage、echo_coverage、motion_consistency、max_dbz、upstream_max_dbz、trend_3、trend_6、cappi、grid_now、secondary、rain_2h_flag、risk_scores、optical flow、bad_frame、low_quality_frame 等。
+- 数值引用方式：不要写"max_dBZ=30"，而是写"附近有弱降水云团"；不要写"coverage=0.014"，而是写"覆盖面积很小"；不要写"QPF6min全程为0"，而是写"官方短期预报显示未来2小时无雨"。
+- 用自然语言替代示例：
+  · "QPF6min 全 0" → "官方预报显示未来2小时无降雨"
+  · "rainFlag=0" → "第二官方源也确认近期无雨"
+  · "max_dBZ=30, playable_coverage=0.014" → "雷达显示附近有少量弱降水云团，但面积很小"
+  · "playable_coverage=0" → "球场上空没有有效降水信号"
+  · "trend_3 减弱" → "降水云团在最近十几分钟有所减弱"
+  · "motion_consistency=0.98" → "云团移动方向稳定"
+  · "upstream_echo" → "上游方向有降水云团"
+  · "humidity_pct=81%" → "当前湿度较高(81%)"——温湿度和风速等常见指标可以保留数值
+- risk_assessment 的 reason 应当是一句通俗易懂的中文解释，像朋友给你发微信提醒，而不是气象工程师的数据日志。
+- data_summary 应当像电视天气播报员说话：简洁、口语化、有结论倾向。
+- conclusion 应像一位热心球友给出的打球建议。
+- reasoning 数组是内部技术审计记录，可以保留原始数据引用和技术术语。
+
+输入数据：
 {context}
-```
 
-## 输出要求
-请输出纯净合法的 JSON 格式，不要包含任何 Markdown 代码块包裹（如```json），结构严格如下：
+输出 JSON 结构必须严格如下：
 {{
   "data_summary": {{
-    "radar": "用一两句话描述雷达回波的当前状况（有无回波、强度、覆盖范围、移动趋势）",
-    "station": "用一两句话描述地面气象站实况（温度、湿度、风力风向、雨量计读数、能见度）",
-    "official_forecast": "用一句话概括官方短临预报的结论"
+    "radar": "用通俗语言描述雷达回波情况。例如：'球场附近有少量弱降水云团经过，但面积很小，不太可能造成实际降雨'。禁止出现 dBZ、coverage 等术语。",
+    "official_forecast": "用通俗语言概括官方预报结论。例如：'两个官方预报源都认为未来2小时不会下雨'。",
+    "realtime": "用自然语言描述当前天气体感。例如：'现在多云，气温28°C，湿度较高，南风不大，空气质量优'。温湿度风速等常见指标可保留数值。",
+    "background": "用口语化描述今天整体天气趋势。例如：'今天有雷阵雨的可能，但预计打球时段内以多云为主'。"
   }},
-  "reasoning": [
+  "missing_fields": [
+    "列出对判断有用但本次输入缺失的字段；如果无缺失，输出空数组"
+  ],
+  "data_conflicts": [
     {{
-      "evidence": "引用的具体数据点（如：humidity_pct=79, rain_5min_mm=0）",
-      "inference": "基于这条证据得出的判断（如：湿度处于中等偏高水平，弱回波有一定落地可能，但雨量计确认目前无雨）"
-    }},
-    {{
-      "evidence": "另一条数据点...",
-      "inference": "对应的推断..."
+      "conflict": "描述冲突（技术细节允许）",
+      "possible_reason": "解释可能原因",
+      "handling": "说明如何处理"
     }}
   ],
+  "reasoning": [
+    {{
+      "evidence": "引用具体数据点和值（技术细节允许，这是内部审计记录）",
+      "inference": "这条证据的气象含义",
+      "court_impact": "对网球场/打球决策的影响"
+    }}
+  ],
+  "risk_assessment": {{
+    "now_rain_risk": {{
+      "level": "低/中/高",
+      "reason": "通俗解释，例如：'现在天空多云，没有下雨，短期内也没有降雨迹象'"
+    }},
+    "risk_30min": {{
+      "level": "低/中/高",
+      "reason": "通俗解释，例如：'未来半小时官方预报和雷达都不支持会下雨'"
+    }},
+    "risk_60min": {{
+      "level": "低/中/高",
+      "reason": "通俗解释，例如：'一小时后逐小时预报显示可能转小雨，需要留意'"
+    }},
+    "risk_120min": {{
+      "level": "低/中/高",
+      "reason": "通俗解释，例如：'两小时后天气背景有雷阵雨风险，建议届时关注最新预报'"
+    }},
+    "approach_risk": {{
+      "level": "低/中/高",
+      "reason": "通俗解释上游来向是否有降水云团逼近，例如：'上游方向有弱云团，但正在减弱，不太可能影响球场'"
+    }},
+    "landing_probability": {{
+      "level": "低/中/高",
+      "reason": "通俗解释空中云团是否可能变成地面降雨，例如：'虽然雷达有弱信号，但官方预报不认为会落地成雨'"
+    }},
+    "spawning_risk": {{
+      "level": "低/中/高",
+      "reason": "通俗解释是否可能突然冒出新的降水，例如：'今天有雷阵雨背景，不能完全排除突发降水的可能'"
+    }}
+  }},
   "conclusion": {{
-    "headline": "一句话核心结论（如：未来两小时天气平稳，适宜户外运动）",
-    "approach_risk": "接近风险：雷达上游回波是否会扫到球场，用'低/中/高'加一句解释",
-    "landing_probability": "落地概率：结合湿度、雨量计、能见度判断回波能否形成有效降雨",
-    "spawning_risk": "新生风险：高湿、风向变化、午后、常规预报阵雨背景是否支持局地新生对流",
-    "court_impact": "对网球场地的具体影响预测（场地干爽/可能湿滑/不宜打球）",
-    "suggestion": "结合天气和环境的打球建议（如体感温度高注意补水、东风3级注意发球抛球偏移等）"
+    "headline": "一句话核心结论，通俗易懂，例如：'未来2小时大概率不下雨，可以放心开打，但9点后要留意天气变化'。",
+    "playability": "可打/谨慎可打/不建议开打/立即避雨",
+    "court_impact": "通俗描述对球场的影响，例如：'短时间内球场不太可能因降雨变湿，但如果后续下雨场地可能变滑'。",
+    "suggestion": "像朋友一样给出具体建议，例如：'可以正常开打。建议8点半左右看一下最新天气，风不大不影响打球，天热记得多喝水。'",
+    "confidence": "high/medium/low",
+    "confidence_reason": "用通俗语言说明判断的把握程度，例如：'多个预报源意见一致，判断比较有把握，主要不确定性在于9点后的天气变化'"
   }}
 }}
 """
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="LLM diagnostic script for weather forecast.")
+    parser = argparse.ArgumentParser(
+        description="LLM diagnostic script for weather forecast."
+    )
     parser.add_argument(
         "--forecast",
         default="output/forecast.json",
@@ -89,25 +207,82 @@ def parse_args() -> argparse.Namespace:
 
 
 def extract_context(forecast: dict[str, Any]) -> dict[str, Any]:
-    """Extract streamlined context to save tokens and focus the LLM."""
+    """Extract structured context aligned with the four-layer decision model.
+
+    Layer 1: Official QPF (primary verdict)
+    Layer 2: Radar CAPPI (path + trend)
+    Layer 3: Grid realtime (ground calibration)
+    Layer 4: Hourly/daily forecasts (background)
+    """
+    station = forecast.get("station_realtime", {})
+
     return {
+        # Layer 1: Official QPF
+        "official_qpf6min_summary": forecast.get("official_qpf6min_summary"),
+        "official_qpf6min": forecast.get("official_qpf6min"),
+        "secondary_rain_2h_message": station.get("rain_2h_message"),
+        "secondary_rain_flag": station.get("rain_2h_flag"),
+        # Layer 2: Radar CAPPI
+        "current_radar": forecast.get("current"),
         "rain_probability": forecast.get("rain_probability"),
         "confidence": forecast.get("confidence"),
-        "current_radar": forecast.get("current"),
+        "max_dbz_nearby": forecast.get("max_dbz_nearby"),
         "playable_coverage_ratio": forecast.get("playable_coverage_ratio"),
         "motion": forecast.get("motion"),
-        "station_realtime": forecast.get("station_realtime"),
-        "official_qpf6min_summary": forecast.get("official_qpf6min_summary"),
         "diagnostics": forecast.get("diagnostics"),
+        # Layer 2 (cont.): Trend analysis and upstream detection
+        "trends": forecast.get("trends"),
+        "upstream_echo": forecast.get("upstream_echo"),
+        "frame_quality": forecast.get("frame_quality"),
+        # Rule engine pre-computed risk scores (LLM should reference, not override)
+        "risk_scores": forecast.get("risk_scores"),
+        # Layer 3: Grid realtime (precise at court coordinates)
+        "grid_realtime": {
+            "source": station.get("source"),
+            "temperature": station.get("temperature"),
+            "humidity_pct": station.get("humidity_pct"),
+            "wind_direction": station.get("wind_direction"),
+            "wind_power_level": station.get("wind_power_level"),
+            "wind_speed_mps": station.get("wind_speed_mps"),
+            "weather_state": station.get("weather_state"),
+            "aqi": station.get("aqi"),
+            "aqi_level": station.get("aqi_level"),
+            "observation_time": station.get("observation_time"),
+        },
+        # Layer 4: Background forecasts
+        "hourly_forecast": station.get("hourly_forecast", []),
+        "seven_day_forecast": station.get("seven_day_forecast", []),
     }
+
+
+BANNED_PHRASES = [
+    "完全无风险",
+    "绝对不会",
+    "完全排除",
+    "空中无降水粒子",
+    "无任何降雨威胁",
+    "球场保持干燥",
+    "地面干燥，无湿滑风险",
+    "无任何降水回波",
+    "对比赛无实质影响",
+    "完全排除降雨可能",
+]
+
+
+def check_banned_phrases(text: str) -> list[str]:
+    """Check LLM output for banned absolute-language phrases."""
+    return [p for p in BANNED_PHRASES if p in text]
 
 
 def main() -> int:
     args = parse_args()
-    
+
     forecast_path = Path(args.forecast)
     if not forecast_path.exists():
-        print(f"Error: {forecast_path} does not exist. Run nowcast.py first.", file=sys.stderr)
+        print(
+            f"Error: {forecast_path} does not exist. Run nowcast.py first.",
+            file=sys.stderr,
+        )
         return 1
 
     try:
@@ -117,7 +292,9 @@ def main() -> int:
         return 1
 
     context = extract_context(forecast_data)
-    prompt = PROMPT_TEMPLATE.format(context=json.dumps(context, ensure_ascii=False, indent=2))
+    prompt = PROMPT_TEMPLATE.format(
+        context=json.dumps(context, ensure_ascii=False, indent=2)
+    )
 
     client = OpenAI(
         api_key=args.api_key,
@@ -126,7 +303,7 @@ def main() -> int:
 
     print("Sending context to deepseek-v4-pro for analysis...")
     messages = [{"role": "user", "content": prompt}]
-    
+
     try:
         completion = client.chat.completions.create(
             model="deepseek-v4-pro",
@@ -173,26 +350,59 @@ def main() -> int:
 
     print("\n\n" + "=" * 50)
 
-    # Clean up JSON if LLM output markdown wrapper accidentally
-    answer_content = answer_content.strip()
-    if answer_content.startswith("```json"):
-        answer_content = answer_content[7:]
-    if answer_content.startswith("```"):
-        answer_content = answer_content[3:]
-    if answer_content.endswith("```"):
-        answer_content = answer_content[:-3]
-    answer_content = answer_content.strip()
+    # Robust JSON extraction: find outermost { } pair
+    raw = answer_content.strip()
+    if raw.startswith("```"):
+        first_nl = raw.find("\n")
+        if first_nl > 0:
+            raw = raw[first_nl + 1:]
+        else:
+            raw = raw[3:]
+    if raw.endswith("```"):
+        raw = raw[:-3]
+    raw = raw.strip()
+
+    start_idx = raw.find("{")
+    end_idx = raw.rfind("}")
+    if start_idx >= 0 and end_idx > start_idx:
+        json_str = raw[start_idx:end_idx + 1]
+    else:
+        json_str = raw
 
     try:
-        parsed_result = json.loads(answer_content)
+        parsed_result = json.loads(json_str)
     except json.JSONDecodeError as e:
         print(f"Warning: Failed to parse LLM output as JSON: {e}", file=sys.stderr)
-        parsed_result = {"error": "JSON Parse Error", "raw_output": answer_content}
+        import re
+        fixed = re.sub(
+            r'(?<=[\u4e00-\u9fff])"(?=[\u4e00-\u9fff])',
+            '\u201c', json_str,
+        )
+        fixed = re.sub(
+            r'(?<=[\u4e00-\u9fff])"(?=[\u4e00-\u9fff,\u3002\uff0c])',
+            '\u201d', fixed,
+        )
+        try:
+            parsed_result = json.loads(fixed)
+            print("Salvage succeeded after fixing Chinese quotes.", file=sys.stderr)
+        except json.JSONDecodeError:
+            parsed_result = {"error": "JSON Parse Error", "raw_output": answer_content}
+
+    # Post-processing: flag banned absolute-language phrases
+    banned = check_banned_phrases(answer_content)
+    if banned:
+        parsed_result["_tone_warnings"] = banned
+        print(
+            f"Warning: LLM used {len(banned)} banned phrase(s): {banned}",
+            file=sys.stderr,
+        )
 
     output_path = Path(args.output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(json.dumps(parsed_result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    
+    output_path.write_text(
+        json.dumps(parsed_result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    )
+
     print(f"\nSaved report to {output_path}")
     return 0
 

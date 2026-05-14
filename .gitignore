@@ -7,3 +7,6 @@ venv/
 
 data/
 output/
+
+.agent/
+.idea/

@@ -25,13 +25,33 @@ import cv2
 import numpy as np
 from PIL import Image, ImageDraw
 
+from risk_engine import (
+    frame_quality,
+    compute_trends,
+    detect_upstream_echo,
+    compute_risk_scores,
+    save_calibration_log,
+)
+
 
 COURT = {
-    "id": "keji_4th_sports_park",
-    "name": "科技四路文体公园",
-    "lon": 113.55,
-    "lat": 22.39,
+    "id": "qiaoguang_commercial_centre",
+    "name": "侨光商业中心",
+    "lon": 113.54,
+    "lat": 22.20,
 }
+# COURT = {
+#     "id": "Keji 4th Road Tennis Court",
+#     "name": "科技四路网球场",
+#     "lon": 113.55,
+#     "lat": 22.39,
+# }
+# COURT = {
+#     "id": "ShaoGuan City Hall",
+#     "name": "韶关市人民政府",
+#     "lon": 113.60,
+#     "lat": 24.81,
+# }
 RADIUS_KM = 5.0
 RADAR_ECHO_THRESHOLD_DBZ = 15
 PLAYABLE_RAIN_THRESHOLD_DBZ = 25
@@ -40,10 +60,21 @@ HORIZONS = {"30min": 5, "60min": 10, "120min": 20}
 EARTH_RADIUS_KM = 6371.0088
 SOURCE_TZ = timezone(timedelta(hours=8))
 
-# GD121 API Constants
+# GD121 API Constants (CAPPI radar + QPF)
 API_URL_TEMPLATE = "https://wxc.gd121.cn/gdecloud/servlet/servletcityweatherall4?DISTRICTCODE=440402&LNG={lon}&LAT={lat}&FROM=binfen"
 API_HEADERS = {
     "Host": "wxc.gd121.cn",
+    "Accept": "application/json, text/plain, */*",
+    "Origin": "https://mp.gd121.cn",
+    "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 26_4_2 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148 MicroMessenger/8.0.73(0x18004923) NetType/4G Language/zh_CN miniProgram/wx4e37a66956191c3a",
+    "Referer": "https://mp.gd121.cn/",
+    "Accept-Language": "en-US,en;q=0.9",
+}
+
+# Grid weather API (ra.gd121.cn) - precise grid-interpolated real-time weather
+RA_API_URL_TEMPLATE = "https://ra.gd121.cn/grid/api/index/weatherInfo?longitude={lon}&latitude={lat}&FROM=binfen"
+RA_API_HEADERS = {
+    "Host": "ra.gd121.cn",
     "Accept": "application/json, text/plain, */*",
     "Origin": "https://mp.gd121.cn",
     "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 26_4_2 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148 MicroMessenger/8.0.73(0x18004923) NetType/4G Language/zh_CN miniProgram/wx4e37a66956191c3a",
@@ -141,8 +172,30 @@ def fetch_weather_data(lon: float, lat: float) -> dict[str, Any]:
 
     req = urllib.request.Request(url, headers=API_HEADERS)
     with urllib.request.urlopen(req, context=ctx, timeout=30) as response:
-        data = response.read().decode('utf-8')
+        data = response.read().decode("utf-8")
         return json.loads(data)
+
+
+def fetch_grid_weather(lon: float, lat: float) -> dict[str, Any] | None:
+    """Fetch grid-interpolated real-time weather from ra.gd121.cn.
+
+    Returns precise weather data at the exact coordinates (not from a distant station).
+    Returns None on failure so the system can fall back gracefully.
+    """
+    url = RA_API_URL_TEMPLATE.format(lon=lon, lat=lat)
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+
+    try:
+        req = urllib.request.Request(url, headers=RA_API_HEADERS)
+        with urllib.request.urlopen(req, context=ctx, timeout=15) as response:
+            raw = json.loads(response.read().decode("utf-8"))
+            if raw.get("status") == 200 and "data" in raw:
+                return raw["data"]
+    except Exception as e:
+        print(f"Warning: grid weather API failed: {e}", file=sys.stderr)
+    return None
 
 
 def first_row(payload: dict[str, Any]) -> dict[str, Any]:
@@ -202,6 +255,21 @@ def download_frame(url: str, cache_dir: Path) -> Path:
     return path
 
 
+def cleanup_cache(cache_dir: Path, max_age_hours: float = 2.0) -> None:
+    """Remove files in the cache directory older than max_age_hours."""
+    if not cache_dir.exists():
+        return
+    now = time.time()
+    for file_path in cache_dir.glob("*.png"):
+        try:
+            if file_path.is_file():
+                mtime = file_path.stat().st_mtime
+                if (now - mtime) > (max_age_hours * 3600):
+                    file_path.unlink()
+        except Exception as e:
+            print(f"Warning: failed to delete old cache file {file_path}: {e}", file=sys.stderr)
+
+
 def image_to_dbz(image: Image.Image) -> np.ndarray:
     rgba = np.array(image.convert("RGBA"), dtype=np.uint8)
     rgb = rgba[:, :, :3].astype(np.int32)
@@ -227,7 +295,15 @@ def load_frames(entries: list[tuple[datetime, str]], cache_dir: Path) -> list[Fr
     for timestamp, url in entries:
         path = download_frame(url, cache_dir)
         rgba = Image.open(path).convert("RGBA")
-        frames.append(Frame(timestamp=timestamp, url=url, path=path, dbz=image_to_dbz(rgba), rgba=rgba))
+        frames.append(
+            Frame(
+                timestamp=timestamp,
+                url=url,
+                path=path,
+                dbz=image_to_dbz(rgba),
+                rgba=rgba,
+            )
+        )
     if len(frames) < 2:
         raise ValueError("At least two CAPPI frames are required for optical flow")
     sizes = {frame.dbz.shape for frame in frames}
@@ -236,13 +312,17 @@ def load_frames(entries: list[tuple[datetime, str]], cache_dir: Path) -> list[Fr
     return frames
 
 
-def lon_lat_to_pixel(lon: float, lat: float, bounds: Bounds, width: int, height: int) -> tuple[float, float]:
+def lon_lat_to_pixel(
+    lon: float, lat: float, bounds: Bounds, width: int, height: int
+) -> tuple[float, float]:
     x = (lon - bounds.min_lon) / (bounds.max_lon - bounds.min_lon) * width
     y = (bounds.max_lat - lat) / (bounds.max_lat - bounds.min_lat) * height
     return x, y
 
 
-def pixel_grids(bounds: Bounds, width: int, height: int) -> tuple[np.ndarray, np.ndarray]:
+def pixel_grids(
+    bounds: Bounds, width: int, height: int
+) -> tuple[np.ndarray, np.ndarray]:
     xs = np.arange(width, dtype=np.float64) + 0.5
     ys = np.arange(height, dtype=np.float64) + 0.5
     lon = bounds.min_lon + xs / width * (bounds.max_lon - bounds.min_lon)
@@ -250,14 +330,19 @@ def pixel_grids(bounds: Bounds, width: int, height: int) -> tuple[np.ndarray, np
     return np.meshgrid(lon, lat)
 
 
-def haversine_km(lon1: np.ndarray, lat1: np.ndarray, lon2: float, lat2: float) -> np.ndarray:
+def haversine_km(
+    lon1: np.ndarray, lat1: np.ndarray, lon2: float, lat2: float
+) -> np.ndarray:
     lon1_rad = np.radians(lon1)
     lat1_rad = np.radians(lat1)
     lon2_rad = math.radians(lon2)
     lat2_rad = math.radians(lat2)
     dlon = lon1_rad - lon2_rad
     dlat = lat1_rad - lat2_rad
-    a = np.sin(dlat / 2) ** 2 + np.cos(lat1_rad) * math.cos(lat2_rad) * np.sin(dlon / 2) ** 2
+    a = (
+        np.sin(dlat / 2) ** 2
+        + np.cos(lat1_rad) * math.cos(lat2_rad) * np.sin(dlon / 2) ** 2
+    )
     return EARTH_RADIUS_KM * 2 * np.arcsin(np.sqrt(a))
 
 
@@ -300,7 +385,9 @@ def estimate_motion(frames: list[Frame]) -> tuple[float, float, float]:
 
 
 def translate_dbz(dbz: np.ndarray, dx: float, dy: float, steps: int) -> np.ndarray:
-    matrix = np.array([[1.0, 0.0, dx * steps], [0.0, 1.0, dy * steps]], dtype=np.float32)
+    matrix = np.array(
+        [[1.0, 0.0, dx * steps], [0.0, 1.0, dy * steps]], dtype=np.float32
+    )
     return cv2.warpAffine(
         dbz,
         matrix,
@@ -323,34 +410,34 @@ def summarize_area(dbz: np.ndarray, mask: np.ndarray) -> dict[str, float]:
     values = dbz[mask]
     has_echo = values >= RADAR_ECHO_THRESHOLD_DBZ
     has_playable = values >= PLAYABLE_RAIN_THRESHOLD_DBZ
-    
+
     echo_coverage = float(has_echo.mean()) if values.size else 0.0
     playable_coverage = float(has_playable.mean()) if values.size else 0.0
     max_dbz = float(values.max()) if values.size else 0.0
-    
+
     mean_rain_rate = 0.0
     if has_playable.any():
         rain_rates = [dbz_to_rain_rate(float(v)) for v in values[has_playable]]
         mean_rain_rate = float(np.mean(rain_rates))
-        
+
     return {
         "echo_coverage": echo_coverage,
         "playable_coverage": playable_coverage,
         "max_dbz": max_dbz,
-        "mean_rain_rate": mean_rain_rate
+        "mean_rain_rate": mean_rain_rate,
     }
 
 
 def probability_from_stats(
-    stats: dict[str, float], 
-    horizon_steps: int, 
+    stats: dict[str, float],
+    horizon_steps: int,
     motion_consistency: float,
-    qpf_has_rain: bool
+    qpf_has_rain: bool,
 ) -> float:
     coverage = stats["playable_coverage"]
     max_dbz = stats["max_dbz"]
     rain_rate = stats["mean_rain_rate"]
-    
+
     if max_dbz < PLAYABLE_RAIN_THRESHOLD_DBZ:
         base_prob = min(0.1, stats["echo_coverage"] * 0.5)
     else:
@@ -359,16 +446,18 @@ def probability_from_stats(
         raw = 0.2 + 0.5 * coverage_score + 0.3 * intensity_score
         horizon_discount = {5: 1.0, 10: 0.85, 20: 0.62}.get(horizon_steps, 0.7)
         base_prob = raw * horizon_discount * (0.8 + 0.2 * motion_consistency)
-        
+
     if base_prob > 0.2 and not qpf_has_rain:
         base_prob *= 0.5
     elif base_prob < 0.2 and qpf_has_rain:
         base_prob = max(base_prob, 0.3)
-        
+
     return round(float(max(0.0, min(0.99, base_prob))), 2)
 
 
-def confidence_label(horizon_steps: int, motion_consistency: float, frame_count: int) -> str:
+def confidence_label(
+    horizon_steps: int, motion_consistency: float, frame_count: int
+) -> str:
     if horizon_steps >= 20:
         return "low"
     if frame_count >= 4 and motion_consistency >= 0.55:
@@ -376,7 +465,9 @@ def confidence_label(horizon_steps: int, motion_consistency: float, frame_count:
     return "medium" if horizon_steps == 5 else "low"
 
 
-def create_debug_image(latest: Frame, bounds: Bounds, mask: np.ndarray, path: Path) -> None:
+def create_debug_image(
+    latest: Frame, bounds: Bounds, mask: np.ndarray, path: Path
+) -> None:
     base = latest.rgba.convert("RGBA")
     overlay = Image.new("RGBA", base.size, (0, 0, 0, 0))
     draw = ImageDraw.Draw(overlay)
@@ -387,11 +478,72 @@ def create_debug_image(latest: Frame, bounds: Bounds, mask: np.ndarray, path: Pa
 
     x, y = lon_lat_to_pixel(COURT["lon"], COURT["lat"], bounds, base.width, base.height)
     draw = ImageDraw.Draw(overlay)
-    draw.ellipse((x - 6, y - 6, x + 6, y + 6), fill=(255, 0, 0, 255), outline=(255, 255, 255, 255), width=2)
+    draw.ellipse(
+        (x - 6, y - 6, x + 6, y + 6),
+        fill=(255, 0, 0, 255),
+        outline=(255, 255, 255, 255),
+        width=2,
+    )
     draw.text((x + 10, y - 10), COURT["name"], fill=(255, 0, 0, 255))
 
     path.parent.mkdir(parents=True, exist_ok=True)
     Image.alpha_composite(base, overlay).save(path)
+
+
+def save_radar_frames(
+    frames: list[Frame], bounds: Bounds, mask: np.ndarray, output_dir: Path
+) -> list[dict[str, str]]:
+    """Save each CAPPI frame as individual PNG with court marker overlay.
+
+    Returns list of {time, path, timestamp} for the frontend timeline player.
+    """
+    output_dir.mkdir(parents=True, exist_ok=True)
+    # Clean old frames
+    for old in output_dir.glob("frame_*.png"):
+        try:
+            old.unlink()
+        except OSError:
+            pass
+
+    result = []
+    for i, f in enumerate(frames):
+        base = f.rgba.convert("RGBA")
+        overlay = Image.new("RGBA", base.size, (0, 0, 0, 0))
+
+        # Draw 5km radius
+        mask_img = Image.fromarray(np.where(mask, 60, 0).astype(np.uint8), mode="L")
+        radius_layer = Image.new("RGBA", base.size, (255, 255, 255, 0))
+        radius_layer.putalpha(mask_img)
+        overlay = Image.alpha_composite(overlay, radius_layer)
+
+        draw = ImageDraw.Draw(overlay)
+        # Court marker
+        x, y = lon_lat_to_pixel(
+            COURT["lon"], COURT["lat"], bounds, base.width, base.height
+        )
+        draw.ellipse(
+            (x - 5, y - 5, x + 5, y + 5),
+            fill=(255, 0, 0, 255),
+            outline=(255, 255, 255, 200),
+            width=2,
+        )
+
+        # Timestamp label
+        time_str = f.timestamp.strftime("%H:%M")
+        draw.text((8, 8), time_str, fill=(255, 255, 255, 220))
+
+        composed = Image.alpha_composite(base, overlay)
+        fname = f"frame_{i:02d}_{f.timestamp.strftime('%H%M')}.png"
+        out_path = output_dir / fname
+        composed.save(out_path)
+
+        result.append({
+            "time": time_str,
+            "path": str(out_path),
+            "timestamp": f.timestamp.isoformat(),
+        })
+
+    return result
 
 
 def check_qpf_rain(row: dict[str, Any], steps: int) -> bool:
@@ -415,81 +567,129 @@ def official_summary(row: dict[str, Any]) -> dict[str, Any]:
         "official_qpf6min_summary": row.get("qpf6min_summary", ""),
         "official_qpf6min_origin_dt": row.get("qpf6min_origin_dt", ""),
         "official_qpf6min": [
-            {"dt": item.get("dt"), "r": item.get("r"), "ro": item.get("ro"), "s": item.get("s")}
+            {
+                "dt": item.get("dt"),
+                "r": item.get("r"),
+                "ro": item.get("ro"),
+                "s": item.get("s"),
+            }
             for item in qpf6min
             if isinstance(item, dict)
         ],
     }
 
 
-def extract_station_realtime(row: dict[str, Any]) -> dict[str, Any]:
-    """Extract ground station real-time observations (sk_) and daily forecast (f_rows)."""
-    def _safe_float(val: Any, default: float = 0.0) -> float:
-        try:
-            v = float(val)
-            return default if v >= 9999 else v
-        except (ValueError, TypeError):
-            return default
+def extract_grid_realtime(grid_data: dict[str, Any] | None) -> dict[str, Any]:
+    """Extract real-time weather from ra.gd121.cn grid API response.
 
-    f_rows = row.get("f_rows", [])
-    daily_forecast = []
-    if isinstance(f_rows, list):
-        for item in f_rows[:6]:
-            if isinstance(item, dict):
-                daily_forecast.append({
-                    "weather": item.get("s", ""),
-                    "temp": item.get("t", ""),
-                    "wind_speed": item.get("ws", ""),
-                    "wind_dir": item.get("wd", ""),
-                })
+    This data is grid-interpolated at the exact court coordinates,
+    unlike the old sk_ data which came from a station 12km away.
+    """
+    if not grid_data:
+        return {"source": "unavailable"}
+
+    nw = grid_data.get("nowWeather", {})
+    rain_dto = grid_data.get("nowTwoHourResDto", {})
+
+    # Parse humidity string like "76%" -> 76.0
+    humidity_str = nw.get("humidity", "0")
+    try:
+        humidity = float(str(humidity_str).replace("%", ""))
+    except (ValueError, TypeError):
+        humidity = 0.0
+
+    # Extract 7-day forecast for "天气底色" judgment
+    seven_day = []
+    for item in grid_data.get("sevenDayWeatherForecast", [])[:7]:
+        if isinstance(item, dict):
+            seven_day.append(
+                {
+                    "date": item.get("dateOrRimeStr", ""),
+                    "label": item.get("dateOrRimeTagStr", ""),
+                    "weather_day": item.get("weather", ""),
+                    "weather_night": item.get("eveningWeather", ""),
+                    "temp_max": item.get("maxTemperature"),
+                    "temp_min": item.get("minTemperature"),
+                    "wind_dir": item.get("windDirection", ""),
+                    "wind_power": item.get("windPowerLevel", ""),
+                }
+            )
+
+    # Extract upcoming hourly forecast (next 12 hours)
+    hourly = []
+    for item in grid_data.get("oneDay24WeatherForecast", [])[:12]:
+        if isinstance(item, dict):
+            hourly.append(
+                {
+                    "time": item.get("dateOrRimeStr", ""),
+                    "weather": item.get("weather", ""),
+                    "temp": item.get("temperature"),
+                    "wind_dir": item.get("windDirection", ""),
+                    "wind_power": item.get("windPowerLevel", ""),
+                }
+            )
 
     return {
-        "station_name": row.get("sk_s_location", ""),
-        "observation_time": row.get("sk_time", ""),
-        "temperature": _safe_float(row.get("sk_t")),
-        "feels_like": _safe_float(row.get("sk_t_feel")),
-        "humidity_pct": _safe_float(row.get("sk_h")),
-        "pressure_hpa": _safe_float(row.get("sk_p")),
-        "wind": row.get("sk_w", ""),
-        "wind_speed_mps": _safe_float(row.get("sk_wp")),
-        "wind_power_level": int(_safe_float(row.get("sk_wp_level"))),
-        "wind_direction_deg": _safe_float(row.get("sk_wd")),
-        "rain_5min_mm": _safe_float(row.get("sk_r5m")),
-        "rain_1h_mm": _safe_float(row.get("sk_r1h")),
-        "visibility_m": _safe_float(row.get("sk_visi")),
-        "weather_state": row.get("sk_s", ""),
-        "aqi": int(_safe_float(row.get("pm_aqi"))),
-        "aqi_level": row.get("pm_q", ""),
-        "pm25": _safe_float(row.get("pm_pm25")),
-        "daily_forecast": daily_forecast,
+        "source": "grid_interpolated",
+        "observation_time": nw.get("updateTime", ""),
+        "temperature": nw.get("temperature"),
+        "humidity_pct": humidity,
+        "wind_direction": nw.get("windDirection", ""),
+        "wind_power_level": nw.get("windPowerLevel", ""),
+        "wind_speed_mps": nw.get("windSpeed"),
+        "weather_state": nw.get("weather", ""),
+        "aqi": nw.get("airQualityAqi"),
+        "aqi_level": nw.get("airQuality", ""),
+        "rain_2h_message": rain_dto.get("message", ""),
+        "rain_2h_flag": rain_dto.get("rainFlag", 0),
+        "hourly_forecast": hourly,
+        "seven_day_forecast": seven_day,
     }
 
 
-def build_report(row: dict[str, Any], bounds: Bounds, frames: list[Frame], debug_image: str) -> dict[str, Any]:
+def build_report(
+    row: dict[str, Any],
+    bounds: Bounds,
+    frames: list[Frame],
+    debug_image: str,
+    grid_data: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     latest = frames[-1]
     height, width = latest.dbz.shape
+    grid_realtime = extract_grid_realtime(grid_data)
     mask = court_mask(bounds, width, height)
     dx, dy, motion_consistency = estimate_motion(frames)
 
+    # ---- Frame quality control ----
+    quality_scores = []
+    for i, f in enumerate(frames):
+        prev = frames[i - 1].dbz if i > 0 else None
+        quality_scores.append(frame_quality(f.dbz, mask, prev))
+
+    # ---- Dual-window trend analysis ----
+    frames_dbz = [f.dbz for f in frames]
+    trends = compute_trends(frames_dbz, mask, quality_scores)
+
+    # ---- Upstream echo detection ----
+    upstream = detect_upstream_echo(latest.dbz, mask, dx, dy, steps=5)
+
+    # ---- Original radar analysis ----
     current_stats = summarize_area(latest.dbz, mask)
     rain_probability: dict[str, float] = {}
     confidence: dict[str, str] = {}
     max_dbz_nearby: dict[str, int] = {}
     coverage_ratio: dict[str, float] = {}
-    
     conflicts = set()
 
     for label, steps in HORIZONS.items():
         future = translate_dbz(latest.dbz, dx, dy, steps)
         stats = summarize_area(future, mask)
         qpf_rain = check_qpf_rain(row, steps)
-        
         prob = probability_from_stats(stats, steps, motion_consistency, qpf_rain)
         rain_probability[label] = prob
         confidence[label] = confidence_label(steps, motion_consistency, len(frames))
         max_dbz_nearby[label] = int(round(stats["max_dbz"]))
         coverage_ratio[label] = round(stats["playable_coverage"], 4)
-        
         if prob > 0.3 and not qpf_rain:
             conflicts.add("radar_qpf_disagreement")
         elif prob < 0.3 and qpf_rain:
@@ -498,42 +698,69 @@ def build_report(row: dict[str, Any], bounds: Bounds, frames: list[Frame], debug
     radar_has_echo = current_stats["max_dbz"] >= RADAR_ECHO_THRESHOLD_DBZ
     radar_has_playable = current_stats["max_dbz"] >= PLAYABLE_RAIN_THRESHOLD_DBZ
     qpf_has_rain_any = check_qpf_rain(row, 20)
-    
+
     if motion_consistency < 0.5:
         conflicts.add("low_motion_confidence")
-        
+
     debug_hints = []
     if "radar_qpf_disagreement" in conflicts:
-        debug_hints.append("CAPPI detects echo but QPF reports no rain. Verify if echo is below effective playable threshold.")
+        debug_hints.append("CAPPI detects echo but QPF reports no rain.")
     if "qpf_rain_without_radar" in conflicts:
-        debug_hints.append("QPF reports rain but CAPPI is clear. Could be low-level rain not visible to radar.")
+        debug_hints.append("QPF reports rain but CAPPI is clear.")
     if radar_has_echo and not radar_has_playable:
-        debug_hints.append("Weak echo detected (>=15, <25 dBZ). Likely no impact on court.")
+        debug_hints.append("Weak echo detected (>=15, <25 dBZ).")
 
     diagnostics = {
         "signals": {
             "radar_has_echo": bool(radar_has_echo),
             "radar_has_playable_rain_echo": bool(radar_has_playable),
             "qpf_has_rain": bool(qpf_has_rain_any),
-            "motion_consistency": round(motion_consistency, 3)
+            "motion_consistency": round(motion_consistency, 3),
         },
         "conflicts": list(conflicts),
-        "debug_hints": debug_hints
+        "debug_hints": debug_hints,
     }
+
+    # ---- Four-layer risk engine ----
+    qpf6min_all_zero = not qpf_has_rain_any
+    rain_flag = grid_realtime.get("rain_2h_flag", 0) or 0
+    hourly = grid_realtime.get("hourly_forecast", [])
+
+    risk_scores = compute_risk_scores(
+        current_stats=current_stats,
+        rain_probability=rain_probability,
+        trends=trends,
+        upstream=upstream,
+        grid_realtime=grid_realtime,
+        qpf6min_all_zero=qpf6min_all_zero,
+        rain_flag=rain_flag,
+        motion_consistency=motion_consistency,
+        hourly_forecast=hourly,
+    )
 
     if debug_image:
         create_debug_image(latest, bounds, mask, Path(debug_image))
 
-    court_x, court_y = lon_lat_to_pixel(COURT["lon"], COURT["lat"], bounds, width, height)
+    # Save individual frames for timeline player
+    frames_dir = Path(debug_image).parent / "radar_frames" if debug_image else Path("output/radar_frames")
+    radar_frame_entries = save_radar_frames(frames, bounds, mask, frames_dir)
+
+    court_x, court_y = lon_lat_to_pixel(
+        COURT["lon"], COURT["lat"], bounds, width, height
+    )
     report = {
         "generated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
         "source_frame_time": latest.timestamp.isoformat(),
         "court": {**COURT, "radius_km": RADIUS_KM},
+        "radar_frames": radar_frame_entries,
         "cappi": {
-            "bounds": [[bounds.min_lat, bounds.min_lon], [bounds.max_lat, bounds.max_lon]],
+            "bounds": [
+                [bounds.min_lat, bounds.min_lon],
+                [bounds.max_lat, bounds.max_lon],
+            ],
             "image_size": {"width": width, "height": height},
             "frame_count": len(frames),
-            "frame_times": [frame.timestamp.isoformat() for frame in frames],
+            "frame_times": [f.timestamp.isoformat() for f in frames],
             "latest_url": latest.url,
         },
         "mapping_debug": {
@@ -552,32 +779,43 @@ def build_report(row: dict[str, Any], bounds: Bounds, frames: list[Frame], debug
             "playable_coverage": round(current_stats["playable_coverage"], 4),
             "mean_rain_rate": round(current_stats["mean_rain_rate"], 2),
         },
+        "trends": trends,
+        "upstream_echo": upstream,
+        "risk_scores": risk_scores,
         "rain_probability": rain_probability,
         "confidence": confidence,
         "max_dbz_nearby": max_dbz_nearby,
         "playable_coverage_ratio": coverage_ratio,
         "diagnostics": diagnostics,
-        "station_realtime": extract_station_realtime(row),
+        "frame_quality": [round(q, 2) for q in quality_scores],
+        "station_realtime": grid_realtime,
         **official_summary(row),
     }
     return report
 
 
 def run_once(args: argparse.Namespace) -> None:
+    grid_data = None
     if args.daemon:
         print(f"Fetching live data for lon={COURT['lon']}, lat={COURT['lat']}...")
         payload = fetch_weather_data(COURT["lon"], COURT["lat"])
+        grid_data = fetch_grid_weather(COURT["lon"], COURT["lat"])
     else:
         print(f"Loading local response from {args.response}...")
         payload = load_response(Path(args.response))
-        
+
     row = first_row(payload)
     bounds = parse_bounds(row)
     entries = collect_cappi(row, args.max_frames)
     frames = load_frames(entries, Path(args.cache_dir))
-    report = build_report(row, bounds, frames, args.debug_image)
+    report = build_report(row, bounds, frames, args.debug_image, grid_data)
+
+    # Save calibration log for future backtesting
+    risk_scores = report.get("risk_scores", {})
+    save_calibration_log(report, risk_scores)
+
     text = json.dumps(report, ensure_ascii=False, indent=2)
-    
+
     if args.output == "-":
         print(text)
     else:
@@ -585,6 +823,9 @@ def run_once(args: argparse.Namespace) -> None:
         output.parent.mkdir(parents=True, exist_ok=True)
         output.write_text(text + "\n", encoding="utf-8")
         print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Wrote {output}")
+
+    # Auto-cleanup old frames to prevent unlimited disk usage
+    cleanup_cache(Path(args.cache_dir), max_age_hours=2.0)
 
 
 def main() -> int:
@@ -595,7 +836,10 @@ def main() -> int:
             try:
                 run_once(args)
             except Exception as e:
-                print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Error in daemon iteration: {e}", file=sys.stderr)
+                print(
+                    f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Error in daemon iteration: {e}",
+                    file=sys.stderr,
+                )
             print(f"Waiting {args.interval} seconds...")
             time.sleep(args.interval)
     else:
