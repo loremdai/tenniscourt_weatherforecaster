@@ -36,6 +36,38 @@ function tickNTP() {
     if (eS) eS.textContent = s;
 }
 
+// ─── Next Update Countdown ───
+let _nextUpdateTarget = null; // Date object for when next update is expected
+let _updateInterval = 360;    // seconds between backend updates
+
+function tickNextUpdate() {
+    const el = document.getElementById('next-update');
+    const textEl = document.getElementById('next-update-text');
+    if (!el || !textEl || !_nextUpdateTarget) return;
+
+    const now = new Date(Date.now() + _ntpOffset);
+    const remainMs = _nextUpdateTarget.getTime() - now.getTime();
+    const remainSec = Math.max(0, Math.ceil(remainMs / 1000));
+
+    // Progress fill (0 = just updated, 1 = about to update)
+    const progress = Math.min(1, Math.max(0, 1 - remainSec / _updateInterval));
+    el.style.setProperty('--next-progress', progress.toFixed(3));
+
+    if (remainSec <= 0) {
+        textEl.textContent = '更新中...';
+        el.classList.add('imminent');
+    } else if (remainSec <= 30) {
+        textEl.textContent = `即将更新 ${remainSec}s`;
+        el.classList.add('imminent');
+    } else {
+        const m = Math.floor(remainSec / 60);
+        const s = remainSec % 60;
+        textEl.textContent = `下次更新: ${m}:${String(s).padStart(2, '0')}`;
+        el.classList.remove('imminent');
+    }
+}
+setInterval(tickNextUpdate, 1000);
+
 async function fetchDashboardData() {
     const t = Date.now();
     try {
@@ -59,6 +91,15 @@ function updateForecastUI(data) {
     if (data.generated_at) {
         const d = new Date(data.generated_at);
         setText('update-time', `最后更新: ${d.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}`);
+        // Next update countdown — prefer backend-stamped time (accounts for LLM processing)
+        if (data.next_update_at) {
+            _nextUpdateTarget = new Date(data.next_update_at);
+        } else {
+            // Fallback: estimate from interval
+            const interval = data.update_interval_seconds || 360;
+            _nextUpdateTarget = new Date(d.getTime() + interval * 1000);
+        }
+        _updateInterval = Math.max(1, Math.round((_nextUpdateTarget.getTime() - d.getTime()) / 1000));
     }
 
     // Booking decision

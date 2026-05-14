@@ -599,35 +599,64 @@ def extract_grid_realtime(grid_data: dict[str, Any] | None) -> dict[str, Any]:
         humidity = 0.0
 
     # Extract 7-day forecast for "天气底色" judgment
+    # Filter out API placeholder entries: the ra.gd121.cn API returns unfilled
+    # defaults (temp=0, weather=晴, wind=西北风) for days it hasn't computed.
     seven_day = []
     for item in grid_data.get("sevenDayWeatherForecast", [])[:7]:
         if isinstance(item, dict):
+            max_t = item.get("maxTemperature")
+            min_t = item.get("minTemperature")
+            # Placeholder check: both temps are 0 (or None) AND weather is the
+            # generic default "晴" — real clear-sky forecasts still have temps.
+            is_placeholder = (
+                (max_t is None or max_t == 0)
+                and (min_t is None or min_t == 0)
+                and item.get("weather", "") == "晴"
+                and item.get("windDirection", "") == "西北风"
+            )
+            if is_placeholder:
+                # Keep "today" even if partially placeholder (it often has
+                # valid daytime data), skip future placeholder days entirely.
+                if item.get("dateOrRimeTagStr", "") not in ("昨天", "今天"):
+                    continue
             seven_day.append(
                 {
                     "date": item.get("dateOrRimeStr", ""),
                     "label": item.get("dateOrRimeTagStr", ""),
                     "weather_day": item.get("weather", ""),
                     "weather_night": item.get("eveningWeather", ""),
-                    "temp_max": item.get("maxTemperature"),
-                    "temp_min": item.get("minTemperature"),
+                    "temp_max": max_t,
+                    "temp_min": min_t,
                     "wind_dir": item.get("windDirection", ""),
                     "wind_power": item.get("windPowerLevel", ""),
                 }
             )
 
     # Extract upcoming hourly forecast (next 12 hours)
+    # Same placeholder filtering as 7-day: skip entries where temp=0 +
+    # weather=晴 + wind=西北风 which are unfilled API defaults.
     hourly = []
-    for item in grid_data.get("oneDay24WeatherForecast", [])[:12]:
+    for item in grid_data.get("oneDay24WeatherForecast", [])[:24]:
         if isinstance(item, dict):
+            temp = item.get("temperature")
+            is_placeholder = (
+                (temp is None or temp == 0)
+                and item.get("weather", "") == "晴"
+                and item.get("windDirection", "") == "西北风"
+            )
+            if is_placeholder:
+                continue
             hourly.append(
                 {
                     "time": item.get("dateOrRimeStr", ""),
                     "weather": item.get("weather", ""),
-                    "temp": item.get("temperature"),
+                    "temp": temp,
                     "wind_dir": item.get("windDirection", ""),
                     "wind_power": item.get("windPowerLevel", ""),
                 }
             )
+    # Cap at 12 valid entries
+    hourly = hourly[:12]
 
     return {
         "source": "grid_interpolated",

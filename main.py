@@ -342,6 +342,15 @@ def run_once(args: argparse.Namespace) -> None:
         context["booking"] = booking
         run_llm_diagnosis(context, args.api_key, Path(args.diagnosis_output))
 
+    # ---- Step 6: Stamp next_update_at after ALL processing (incl. LLM) ----
+    if args.daemon:
+        from datetime import timezone
+        next_at = datetime.now().astimezone() + timedelta(seconds=args.interval)
+        report["next_update_at"] = next_at.isoformat(timespec="seconds")
+        output.write_text(
+            json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+        )
+
 
 def main() -> int:
     args = parse_args()
