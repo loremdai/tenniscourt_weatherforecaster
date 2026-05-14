@@ -181,13 +181,26 @@ RADIUS_KM = 5.0
 
 ### Environment Variables / 环境变量
 
+Copy the example file and fill in your key:
+复制示例文件并填入你的密钥：
+
+```bash
+cp .env.example .env
+```
+
+Edit `.env`:
+
+```ini
+# DashScope API Key (OpenAI-compatible, for DeepSeek V4 Pro)
+DASHSCOPE_API_KEY=sk-your_actual_key_here
+```
+
 | Variable | Required | Description |
 |:---|:---:|:---|
 | `DASHSCOPE_API_KEY` | Recommended | Your DashScope API key (OpenAI-compatible). Enables DeepSeek V4 Pro AI diagnosis. <br/> DashScope API 密钥（兼容 OpenAI 接口），用于启用 AI 诊断功能。 |
 
-```bash
-export DASHSCOPE_API_KEY="your_api_key_here"
-```
+The system automatically loads `.env` at startup — no need to manually `export`.
+系统启动时会自动加载 `.env` 文件，无需手动 export。
 
 > **Tip / 提示**: Use `--no-llm` flag to run in pure rule-engine mode without LLM — faster and requires no API key.
 > 使用 `--no-llm` 参数可跳过 LLM 诊断，仅以规则引擎运行，速度更快且无需 API Key。

@@ -19,11 +19,33 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
+
+
+def _load_dotenv(path: str = ".env") -> None:
+    """Load key=value pairs from a .env file into os.environ."""
+    env_path = Path(path)
+    if not env_path.is_file():
+        return
+    for line in env_path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        key = key.strip()
+        value = value.strip().strip("'\"")
+        if key and key not in os.environ:
+            os.environ[key] = value
+
+
+_load_dotenv()
 
 # Local modules
 from nowcast import (
@@ -127,7 +149,6 @@ def compute_lead_time(target_time_str: str, now: datetime) -> tuple[float, str]:
 def run_llm_diagnosis(context: dict[str, Any], api_key: str | None,
                       output_path: Path) -> dict[str, Any] | None:
     """Run LLM diagnosis and return parsed result."""
-    import os
     try:
         from openai import OpenAI
     except ImportError:
