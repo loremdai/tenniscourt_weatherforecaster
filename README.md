@@ -33,9 +33,9 @@ The system ships with a background data-fetching daemon and a modern OLED-dark-m
 
 **中文**
 
-网球天气决策系统是一款专为户外网球场景设计的高精度短临天气预报与智能决策引擎。系统融合官方 QPF 短临降雨预报与自研 CAPPI 雷达光流外推算法、四层递进式风险评估模型及 DeepSeek V4 Pro 大语言模型，为用户提供 0–2 小时内 **"精确到分钟、精确到场地"** 的降雨预测及打球建议。
+网球天气决策系统是一款面向户外网球场景的短临天气预报与决策工具。系统结合官方 QPF 短临降雨预报与自研 CAPPI 雷达光流外推算法、四层风险评估模型及 DeepSeek V4 Pro 大语言模型，提供 0–2 小时内 **分钟级、场地级** 的降雨预测和打球建议。
 
-系统包含常驻后台的数据采集守护进程，以及一套采用极致暗黑模式 (OLED Dark Mode) 与 Bento Grid 布局设计的现代化前端监控看板。
+系统包含后台数据采集守护进程，以及基于深色模式与 Bento Grid 布局的前端监控看板。
 
 ---
 
@@ -43,11 +43,11 @@ The system ships with a background data-fetching daemon and a modern OLED-dark-m
 
 | Feature | Description |
 |:---|:---|
-| **Dual-Engine Data Fusion** | Cross-validates official QPF short-range rainfall forecasts with self-developed CAPPI radar optical-flow extrapolation. <br/> 双擎数据融合：官方 QPF 短临降雨预报与自研 CAPPI 雷达光流外推交叉验证。 |
-| **AI Deep Diagnosis** | Leverages DeepSeek V4 Pro to generate human-readable, evidence-based weather reports — like having a professional meteorologist on call. <br/> AI 深度诊断：接入 DeepSeek-V4-Pro，像专业气象播报员一样出具可靠的打球环境报告。 |
-| **Four-Layer Risk Engine** | Progressive analysis across Radar → Grid → Precipitation → Background layers, outputting a precise risk-score matrix with conservative decision interception. <br/> 四层风控模型：逐级分析雷达层、格点层、降雨层与背景场，输出精准 Risk Score 矩阵。 |
-| **Real-Time Dashboard** | OLED dark-mode Bento Grid dashboard with 12-hour forecasts, 30/60/120-min precipitation probabilities, radar timeline player, and auto-refresh every 30 seconds. <br/> 极客风可视化：包含逐小时预报、降水概率、雷达动态捕捉和 AI 诊断的实时大屏。 |
-| **Booking Decision Engine** | Three-band lead-time aware decision system (0–2h / 2–6h / 6h+) with auto recheck scheduling. <br/> 智能预约决策：三档提前量感知决策系统，自动安排复查时间。 |
+| **Dual-Engine Data Fusion** | Cross-validates official QPF short-range rainfall forecasts with self-developed CAPPI radar optical-flow extrapolation. <br/> 双源数据融合：官方 QPF 短临预报与自研 CAPPI 雷达光流外推相互校验。 |
+| **AI Deep Diagnosis** | Leverages DeepSeek V4 Pro to generate human-readable, evidence-based weather reports — like having a professional meteorologist on call. <br/> AI 诊断：接入 DeepSeek V4 Pro，基于结构化数据生成可读性强的打球环境报告。 |
+| **Four-Layer Risk Engine** | Progressive analysis across Radar → Grid → Precipitation → Background layers, outputting a precise risk-score matrix with conservative decision interception. <br/> 四层风险模型：逐级分析雷达层、格点层、降雨层与背景场，输出多维度风险评分。 |
+| **Real-Time Dashboard** | OLED dark-mode Bento Grid dashboard with 12-hour forecasts, 30/60/120-min precipitation probabilities, radar timeline player, and auto-refresh every 30 seconds. <br/> 实时监控看板：包含逐小时预报、降水概率、雷达回放和 AI 诊断，每 30 秒自动刷新。 |
+| **Booking Decision Engine** | Three-band lead-time aware decision system (0–2h / 2–6h / 6h+) with auto recheck scheduling. <br/> 预约决策：按提前量分三档 (0–2h / 2–6h / 6h+) 给出建议，并自动安排复查时间。 |
 | **Daemon Mode** | Background process with configurable refresh interval (default: 6 min), automatic cache cleanup, and calibration logging. <br/> 守护进程模式：可配置刷新间隔、自动清理缓存、校准日志记录。 |
 
 ---
@@ -87,12 +87,12 @@ The system ships with a background data-fetching daemon and a modern OLED-dark-m
 
 | Module | Role |
 |:---|:---|
-| **`main.py`** | Orchestrator — coordinates fetch, analysis, decision, and diagnosis pipeline. Supports single-shot and daemon modes. <br/> 主入口统筹：协调抓取、推算、决策与诊断流程，支持单次执行和守护模式。 |
-| **`nowcast.py`** | Core algorithm — fetches CAPPI radar imagery, converts to dBZ grids, applies Farneback optical-flow for echo motion extrapolation, and computes rain probability within a configurable radius. <br/> 核心算法：抓取 CAPPI 雷达图、转换 dBZ 网格、光流外推、计算探测半径内降雨概率。 |
-| **`risk_engine.py`** | Four-layer decision engine — frame quality control, dual-window trend analysis, upstream echo detection, risk scoring, booking decisions, and calibration logging. <br/> 四层决策引擎：帧质量控制、双窗口趋势分析、上游回波检测、风险评分及预约决策。 |
-| **`diagnose_forecast.py`** | LLM diagnostic layer — builds precisely constrained prompts, queries DeepSeek V4 Pro, enforces conservative-language guardrails, and outputs structured natural-language reports. <br/> LLM 诊断层：构建精密提示词、调用 DeepSeek、执行语气护栏约束、输出结构化自然语言报告。 |
-| **`serve_dashboard.py`** | Lightweight HTTP server — serves the static frontend and output data with no-cache headers for real-time data freshness. <br/> 轻量 HTTP 服务器：托管静态前端和输出数据，禁用缓存以确保数据实时性。 |
-| **`frontend/`** | Static dashboard — zero-state Bento Grid UI consuming JSON from `output/`, auto-refreshing every 30 seconds. <br/> 静态前端看板：无状态 Bento Grid UI，消费 `output/` 目录的 JSON 数据，每 30 秒自动刷新。 |
+| **`main.py`** | Orchestrator — coordinates fetch, analysis, decision, and diagnosis pipeline. Supports single-shot and daemon modes. <br/> 主入口：协调数据抓取、分析、决策与诊断流程，支持单次执行和守护模式。 |
+| **`nowcast.py`** | Core algorithm — fetches CAPPI radar imagery, converts to dBZ grids, applies Farneback optical-flow for echo motion extrapolation, and computes rain probability within a configurable radius. <br/> 核心算法模块：下载 CAPPI 雷达图、转换 dBZ 网格、光流外推回波运动、计算指定半径内降雨概率。 |
+| **`risk_engine.py`** | Four-layer decision engine — frame quality control, dual-window trend analysis, upstream echo detection, risk scoring, booking decisions, and calibration logging. <br/> 风险决策引擎：帧质量控制、双窗口趋势分析、上游回波检测、风险评分与预约决策。 |
+| **`diagnose_forecast.py`** | LLM diagnostic layer — builds precisely constrained prompts, queries DeepSeek V4 Pro, enforces conservative-language guardrails, and outputs structured natural-language reports. <br/> LLM 诊断模块：构建约束提示词、调用 DeepSeek V4 Pro，输出结构化自然语言诊断报告。 |
+| **`serve_dashboard.py`** | Lightweight HTTP server — serves the static frontend and output data with no-cache headers for real-time data freshness. <br/> 轻量 HTTP 服务器：托管前端页面和输出数据，禁用缓存确保数据实时性。 |
+| **`frontend/`** | Static dashboard — zero-state Bento Grid UI consuming JSON from `output/`, auto-refreshing every 30 seconds. <br/> 静态前端看板：读取 `output/` 目录的 JSON 数据，每 30 秒自动刷新。 |
 
 ---
 
@@ -152,15 +152,15 @@ The dashboard auto-refreshes every 30 seconds.
 
 ### Output Files / 输出文件字典
 
-All pipeline outputs converge in the `output/` directory, which the frontend reads via HTTP:
+系统的数据输出汇总在 `output/` 目录，前端通过 HTTP 读取该目录：
 
 | File | Description |
 |:---|:---|
-| `forecast.json` | Unified analysis JSON — court metadata, optical-flow vectors, real-time weather, and risk matrices for all time windows. <br/> 分析数据大一统 JSON：场地信息、光流向量、实时天气及各时间窗口风险矩阵。 |
-| `diagnosis.json` | Structured LLM diagnosis — headline, data support, reasoning chain, and actionable conclusion. <br/> 结构化 LLM 诊断报告：标题、数据支撑、推理过程和最终结论。 |
-| `debug_court_radius.png` | Radar overlay with 5km detection radius mask and court landmark — useful for manual review. <br/> 带 5km 探测半径遮罩的雷达落点图，用于人工复核或调试。 |
-| `calibration_log.jsonl` | Historical snapshot log for large-scale backtesting and probability threshold tuning. <br/> 历史校验日志，用于大规模回测分析和概率阈值微调。 |
-| `radar_frames/` | Individual timestamped CAPPI frames with court marker overlays for the timeline player. <br/> 带场地标记的逐帧 CAPPI 雷达图，供时间线播放器使用。 |
+| `forecast.json` | Unified analysis JSON — court metadata, optical-flow vectors, real-time weather, and risk matrices for all time windows. <br/> 综合分析 JSON：包含场地信息、光流向量、实时天气及各时间窗口的风险矩阵。 |
+| `diagnosis.json` | Structured LLM diagnosis — headline, data support, reasoning chain, and actionable conclusion. <br/> LLM 诊断报告：包含标题、数据依据、推理过程和结论。 |
+| `debug_court_radius.png` | Radar overlay with 5km detection radius mask and court landmark — useful for manual review. <br/> 调试用雷达叠加图：显示 5km 探测半径和场地标记，便于人工复核。 |
+| `calibration_log.jsonl` | Historical snapshot log for large-scale backtesting and probability threshold tuning. <br/> 校准日志：逐次快照记录，用于回测分析和阈值调优。 |
+| `radar_frames/` | Individual timestamped CAPPI frames with court marker overlays for the timeline player. <br/> 逐帧雷达图：带时间戳和场地标记，供看板时间线播放器使用。 |
 
 ### Customizing Your Court Location / 自定义监控场地
 
@@ -183,14 +183,14 @@ RADIUS_KM = 5.0
 
 | Variable | Required | Description |
 |:---|:---:|:---|
-| `DASHSCOPE_API_KEY` | Recommended | Your DashScope API key (OpenAI-compatible). Enables DeepSeek V4 Pro AI diagnosis. <br/> DashScope API 密钥（兼容 OpenAI），用于启用 AI 深度诊断。 |
+| `DASHSCOPE_API_KEY` | Recommended | Your DashScope API key (OpenAI-compatible). Enables DeepSeek V4 Pro AI diagnosis. <br/> DashScope API 密钥（兼容 OpenAI 接口），用于启用 AI 诊断功能。 |
 
 ```bash
 export DASHSCOPE_API_KEY="your_api_key_here"
 ```
 
 > **Tip / 提示**: Use `--no-llm` flag to run in pure rule-engine mode without LLM — faster and requires no API key.
-> 使用 `--no-llm` 参数可关闭 AI 推理，以纯算力规则引擎模式运行，更快且无需 API Key。
+> 使用 `--no-llm` 参数可跳过 LLM 诊断，仅以规则引擎运行，速度更快且无需 API Key。
 
 ### CLI Reference / 命令行参数
 
@@ -301,5 +301,5 @@ Copyright (c) 2026 [Alistair Dai](https://github.com/loremdai)
 ---
 
 <p align="center">
-  <sub>Built for uninterrupted tennis matches. | 为不间断的网球赛事而生。</sub>
+  <sub>Built for uninterrupted tennis matches. | 让每一场球赛不再被天气打断。</sub>
 </p>
