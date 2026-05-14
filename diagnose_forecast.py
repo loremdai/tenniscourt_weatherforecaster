@@ -200,7 +200,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--api-key",
-        default=os.getenv("DASHSCOPE_API_KEY", "REDACTED_API_KEY"),
+        default=os.getenv("DASHSCOPE_API_KEY", ""),
         help="Aliyun DashScope API Key",
     )
     return parser.parse_args()

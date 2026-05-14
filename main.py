@@ -135,7 +135,7 @@ def run_llm_diagnosis(context: dict[str, Any], api_key: str | None,
               file=sys.stderr)
         return None
 
-    key = api_key or os.getenv("DASHSCOPE_API_KEY", "REDACTED_API_KEY")
+    key = api_key or os.getenv("DASHSCOPE_API_KEY", "")
     prompt = PROMPT_TEMPLATE.format(context=json.dumps(context, ensure_ascii=False, indent=2))
 
     client = OpenAI(
