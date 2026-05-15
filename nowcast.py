@@ -34,24 +34,19 @@ from risk_engine import (
 )
 
 
+# COURT = {
+#     "id": "qiaoguang_commercial_centre",
+#     "name": "侨光商业中心",
+#     "lon": 113.54,
+#     "lat": 22.20,
+# }
 COURT = {
-    "id": "qiaoguang_commercial_centre",
-    "name": "侨光商业中心",
-    "lon": 113.54,
-    "lat": 22.20,
+    "id": "Keji 4th Road Tennis Court",
+    "name": "科技四路网球场",
+    "lon": 113.55,
+    "lat": 22.39,
 }
-# COURT = {
-#     "id": "Keji 4th Road Tennis Court",
-#     "name": "科技四路网球场",
-#     "lon": 113.55,
-#     "lat": 22.39,
-# }
-# COURT = {
-#     "id": "ShaoGuan City Hall",
-#     "name": "韶关市人民政府",
-#     "lon": 113.60,
-#     "lat": 24.81,
-# }
+
 RADIUS_KM = 5.0
 RADAR_ECHO_THRESHOLD_DBZ = 15
 PLAYABLE_RAIN_THRESHOLD_DBZ = 25
@@ -267,7 +262,10 @@ def cleanup_cache(cache_dir: Path, max_age_hours: float = 2.0) -> None:
                 if (now - mtime) > (max_age_hours * 3600):
                     file_path.unlink()
         except Exception as e:
-            print(f"Warning: failed to delete old cache file {file_path}: {e}", file=sys.stderr)
+            print(
+                f"Warning: failed to delete old cache file {file_path}: {e}",
+                file=sys.stderr,
+            )
 
 
 def image_to_dbz(image: Image.Image) -> np.ndarray:
@@ -537,11 +535,13 @@ def save_radar_frames(
         out_path = output_dir / fname
         composed.save(out_path)
 
-        result.append({
-            "time": time_str,
-            "path": str(out_path),
-            "timestamp": f.timestamp.isoformat(),
-        })
+        result.append(
+            {
+                "time": time_str,
+                "path": str(out_path),
+                "timestamp": f.timestamp.isoformat(),
+            }
+        )
 
     return result
 
@@ -771,7 +771,11 @@ def build_report(
         create_debug_image(latest, bounds, mask, Path(debug_image))
 
     # Save individual frames for timeline player
-    frames_dir = Path(debug_image).parent / "radar_frames" if debug_image else Path("output/radar_frames")
+    frames_dir = (
+        Path(debug_image).parent / "radar_frames"
+        if debug_image
+        else Path("output/radar_frames")
+    )
     radar_frame_entries = save_radar_frames(frames, bounds, mask, frames_dir)
 
     court_x, court_y = lon_lat_to_pixel(
