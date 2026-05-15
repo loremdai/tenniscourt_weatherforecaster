@@ -314,5 +314,5 @@ Copyright (c) 2026 [Alistair Dai](https://github.com/loremdai)
 ---
 
 <p align="center">
-  <sub>Built for uninterrupted tennis matches. | 让每一场球赛不再被天气打断。</sub>
+  <sub>Built for uninterrupted tennis matches.</sub>
 </p>
