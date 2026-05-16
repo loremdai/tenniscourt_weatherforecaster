@@ -31,6 +31,7 @@ from risk_engine import (
     detect_upstream_echo,
     compute_risk_scores,
     save_calibration_log,
+    compute_playability,
 )
 
 
@@ -40,12 +41,20 @@ from risk_engine import (
 #     "lon": 113.54,
 #     "lat": 22.20,
 # }
+
 COURT = {
     "id": "Keji 4th Road Tennis Court",
     "name": "科技四路网球场",
     "lon": 113.55,
     "lat": 22.39,
 }
+
+# COURT = {
+#     "id": "Haibo Garden Bld.4",
+#     "name": "海波花园四栋",
+#     "lon": 113.52,
+#     "lat": 22.25,
+# }
 
 RADIUS_KM = 7.0
 RADAR_ECHO_THRESHOLD_DBZ = 15
@@ -114,7 +123,7 @@ class Frame:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="CAPPI 5km rain nowcast MVP")
+    parser = argparse.ArgumentParser(description="CAPPI court-radius rain nowcast MVP")
     parser.add_argument(
         "--response",
         default="response.txt",
@@ -133,7 +142,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--debug-image",
         default="output/debug_court_radius.png",
-        help="Optional debug image path showing court and 5km radius. Use '' to skip.",
+        help="Optional debug image path showing court radius. Use '' to skip.",
     )
     parser.add_argument(
         "--max-frames",
@@ -159,19 +168,21 @@ def load_response(path: Path) -> dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def fetch_weather_data(lon: float, lat: float) -> dict[str, Any]:
+def fetch_weather_data(lon: float, lat: float, timeout: float = 30) -> dict[str, Any]:
     url = API_URL_TEMPLATE.format(lon=lon, lat=lat)
     ctx = ssl.create_default_context()
     ctx.check_hostname = False
     ctx.verify_mode = ssl.CERT_NONE
 
     req = urllib.request.Request(url, headers=API_HEADERS)
-    with urllib.request.urlopen(req, context=ctx, timeout=30) as response:
+    with urllib.request.urlopen(req, context=ctx, timeout=timeout) as response:
         data = response.read().decode("utf-8")
         return json.loads(data)
 
 
-def fetch_grid_weather(lon: float, lat: float) -> dict[str, Any] | None:
+def fetch_grid_weather(
+    lon: float, lat: float, timeout: float = 15
+) -> dict[str, Any] | None:
     """Fetch grid-interpolated real-time weather from ra.gd121.cn.
 
     Returns precise weather data at the exact coordinates (not from a distant station).
@@ -184,7 +195,7 @@ def fetch_grid_weather(lon: float, lat: float) -> dict[str, Any] | None:
 
     try:
         req = urllib.request.Request(url, headers=RA_API_HEADERS)
-        with urllib.request.urlopen(req, context=ctx, timeout=15) as response:
+        with urllib.request.urlopen(req, context=ctx, timeout=timeout) as response:
             raw = json.loads(response.read().decode("utf-8"))
             if raw.get("status") == 200 and "data" in raw:
                 return raw["data"]
@@ -238,14 +249,14 @@ def collect_cappi(row: dict[str, Any], max_frames: int) -> list[tuple[datetime, 
     return frames[-max_frames:]
 
 
-def download_frame(url: str, cache_dir: Path) -> Path:
+def download_frame(url: str, cache_dir: Path, timeout: float = 30) -> Path:
     cache_dir.mkdir(parents=True, exist_ok=True)
     filename = url.rsplit("/", 1)[-1].replace("!wbdstyle", "")
     path = cache_dir / filename
     if path.exists() and path.stat().st_size > 0:
         return path
     request = urllib.request.Request(url, headers={"User-Agent": "nowcast-mvp/0.1"})
-    with urllib.request.urlopen(request, timeout=30) as response:
+    with urllib.request.urlopen(request, timeout=timeout) as response:
         path.write_bytes(response.read())
     return path
 
@@ -288,10 +299,12 @@ def image_to_dbz(image: Image.Image) -> np.ndarray:
     return dbz
 
 
-def load_frames(entries: list[tuple[datetime, str]], cache_dir: Path) -> list[Frame]:
+def load_frames(
+    entries: list[tuple[datetime, str]], cache_dir: Path, download_timeout: float = 30
+) -> list[Frame]:
     frames: list[Frame] = []
     for timestamp, url in entries:
-        path = download_frame(url, cache_dir)
+        path = download_frame(url, cache_dir, timeout=download_timeout)
         rgba = Image.open(path).convert("RGBA")
         frames.append(
             Frame(
@@ -496,19 +509,13 @@ def save_radar_frames(
     Returns list of {time, path, timestamp} for the frontend timeline player.
     """
     output_dir.mkdir(parents=True, exist_ok=True)
-    # Clean old frames
-    for old in output_dir.glob("frame_*.png"):
-        try:
-            old.unlink()
-        except OSError:
-            pass
 
     result = []
     for i, f in enumerate(frames):
         base = f.rgba.convert("RGBA")
         overlay = Image.new("RGBA", base.size, (0, 0, 0, 0))
 
-        # Draw 5km radius
+        # Draw configured court radius.
         mask_img = Image.fromarray(np.where(mask, 60, 0).astype(np.uint8), mode="L")
         radius_layer = Image.new("RGBA", base.size, (255, 255, 255, 0))
         radius_layer.putalpha(mask_img)
@@ -531,7 +538,7 @@ def save_radar_frames(
         draw.text((8, 8), time_str, fill=(255, 255, 255, 220))
 
         composed = Image.alpha_composite(base, overlay)
-        fname = f"frame_{i:02d}_{f.timestamp.strftime('%H%M')}.png"
+        fname = f"frame_{i:02d}.png"
         out_path = output_dir / fname
         composed.save(out_path)
 
@@ -544,6 +551,61 @@ def save_radar_frames(
         )
 
     return result
+
+
+def create_radar_contact_sheet(
+    frame_entries: list[dict[str, str]],
+    output_path: Path,
+    max_frames: int = 6,
+) -> str:
+    """Create a stable contact sheet for multimodal radar visual QA."""
+    selected = frame_entries[-max_frames:]
+    if not selected:
+        return ""
+
+    images: list[tuple[dict[str, str], Image.Image]] = []
+    for entry in selected:
+        path = Path(entry.get("path", ""))
+        if not path.exists():
+            continue
+        images.append((entry, Image.open(path).convert("RGBA")))
+    if not images:
+        return ""
+
+    thumb_w = 260
+    label_h = 28
+    pad = 10
+    thumbs: list[tuple[dict[str, str], Image.Image]] = []
+    for entry, img in images:
+        ratio = thumb_w / max(1, img.width)
+        thumb_h = max(1, int(img.height * ratio))
+        thumb = img.resize((thumb_w, thumb_h), Image.Resampling.LANCZOS)
+        thumbs.append((entry, thumb))
+
+    cell_h = max(thumb.height for _, thumb in thumbs) + label_h
+    sheet_w = pad + len(thumbs) * (thumb_w + pad)
+    sheet_h = pad * 2 + cell_h
+    sheet = Image.new("RGBA", (sheet_w, sheet_h), (12, 18, 28, 255))
+    draw = ImageDraw.Draw(sheet)
+
+    for idx, (entry, thumb) in enumerate(thumbs):
+        x = pad + idx * (thumb_w + pad)
+        y = pad + label_h
+        draw.rectangle(
+            (x - 1, y - label_h, x + thumb_w + 1, y + cell_h - label_h + 1),
+            outline=(80, 90, 105, 255),
+            width=1,
+        )
+        draw.text(
+            (x + 8, pad + 7),
+            f"{idx + 1}. {entry.get('time', '--:--')}",
+            fill=(230, 235, 245, 255),
+        )
+        sheet.alpha_composite(thumb, (x, y))
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    sheet.convert("RGB").save(output_path, quality=92)
+    return str(output_path)
 
 
 def check_qpf_rain(row: dict[str, Any], steps: int) -> bool:
@@ -579,101 +641,121 @@ def official_summary(row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def extract_grid_realtime(grid_data: dict[str, Any] | None) -> dict[str, Any]:
-    """Extract real-time weather from ra.gd121.cn grid API response.
+def extract_station_and_forecast_data(
+    row: dict[str, Any], grid_data: dict[str, Any] | None
+) -> dict[str, Any]:
+    """Extract real-time weather from API 1 (station) and forecasts from API 2 (grid).
 
-    This data is grid-interpolated at the exact court coordinates,
-    unlike the old sk_ data which came from a station 12km away.
+    Real-time data comes from the nearest physical weather station (via sk_ fields).
+    Forecasts (hourly/7-day) come from the grid-interpolated ra.gd121.cn API.
     """
-    if not grid_data:
-        return {"source": "unavailable"}
-
-    nw = grid_data.get("nowWeather", {})
-    rain_dto = grid_data.get("nowTwoHourResDto", {})
-
-    # Parse humidity string like "76%" -> 76.0
-    humidity_str = nw.get("humidity", "0")
+    # 1. Extract station real-time data from API 1
     try:
-        humidity = float(str(humidity_str).replace("%", ""))
+        humidity = float(row.get("sk_h", 0))
     except (ValueError, TypeError):
         humidity = 0.0
 
-    # Extract 7-day forecast for "天气底色" judgment
-    # Filter out API placeholder entries: the ra.gd121.cn API returns unfilled
-    # defaults (temp=0, weather=晴, wind=西北风) for days it hasn't computed.
-    seven_day = []
-    for item in grid_data.get("sevenDayWeatherForecast", [])[:7]:
-        if isinstance(item, dict):
-            max_t = item.get("maxTemperature")
-            min_t = item.get("minTemperature")
-            # Placeholder check: both temps are 0 (or None) AND weather is the
-            # generic default "晴" — real clear-sky forecasts still have temps.
-            is_placeholder = (
-                (max_t is None or max_t == 0)
-                and (min_t is None or min_t == 0)
-                and item.get("weather", "") == "晴"
-                and item.get("windDirection", "") == "西北风"
-            )
-            if is_placeholder:
-                # Keep "today" even if partially placeholder (it often has
-                # valid daytime data), skip future placeholder days entirely.
-                if item.get("dateOrRimeTagStr", "") not in ("昨天", "今天"):
-                    continue
-            seven_day.append(
-                {
-                    "date": item.get("dateOrRimeStr", ""),
-                    "label": item.get("dateOrRimeTagStr", ""),
-                    "weather_day": item.get("weather", ""),
-                    "weather_night": item.get("eveningWeather", ""),
-                    "temp_max": max_t,
-                    "temp_min": min_t,
-                    "wind_dir": item.get("windDirection", ""),
-                    "wind_power": item.get("windPowerLevel", ""),
-                }
-            )
+    try:
+        temp = float(row.get("sk_t", 0))
+    except (ValueError, TypeError):
+        temp = 0.0
 
-    # Extract upcoming hourly forecast (next 12 hours)
-    # Same placeholder filtering as 7-day: skip entries where temp=0 +
-    # weather=晴 + wind=西北风 which are unfilled API defaults.
-    hourly = []
-    for item in grid_data.get("oneDay24WeatherForecast", [])[:24]:
-        if isinstance(item, dict):
-            temp = item.get("temperature")
-            is_placeholder = (
-                (temp is None or temp == 0)
-                and item.get("weather", "") == "晴"
-                and item.get("windDirection", "") == "西北风"
-            )
-            if is_placeholder:
-                continue
-            hourly.append(
-                {
-                    "time": item.get("dateOrRimeStr", ""),
-                    "weather": item.get("weather", ""),
-                    "temp": temp,
-                    "wind_dir": item.get("windDirection", ""),
-                    "wind_power": item.get("windPowerLevel", ""),
-                }
-            )
-    # Cap at 12 valid entries
-    hourly = hourly[:12]
+    try:
+        wind_speed = float(row.get("sk_wp", 0))
+    except (ValueError, TypeError):
+        wind_speed = 0.0
 
-    return {
-        "source": "grid_interpolated",
-        "observation_time": nw.get("updateTime", ""),
-        "temperature": nw.get("temperature"),
+    try:
+        rain_1h = float(row.get("sk_r1h", 0))
+    except (ValueError, TypeError):
+        rain_1h = 0.0
+
+    try:
+        rain_5m = float(row.get("sk_r5m", 0))
+    except (ValueError, TypeError):
+        rain_5m = 0.0
+
+    station_realtime = {
+        "source": "station_observed",
+        "station_name": row.get("sk_name", ""),
+        "distance_m": row.get("sk_to_you_meter", 0),
+        "observation_time": row.get("sk_time", ""),
+        "temperature": temp,
+        "temperature_feels": row.get("sk_t_feel"),
         "humidity_pct": humidity,
-        "wind_direction": nw.get("windDirection", ""),
-        "wind_power_level": nw.get("windPowerLevel", ""),
-        "wind_speed_mps": nw.get("windSpeed"),
-        "weather_state": nw.get("weather", ""),
-        "aqi": nw.get("airQualityAqi"),
-        "aqi_level": nw.get("airQuality", ""),
-        "rain_2h_message": rain_dto.get("message", ""),
-        "rain_2h_flag": rain_dto.get("rainFlag", 0),
-        "hourly_forecast": hourly,
-        "seven_day_forecast": seven_day,
+        "wind_direction": row.get("sk_V11201Str", row.get("sk_w", "")),
+        "wind_power_level": row.get("sk_wp_level", ""),
+        "wind_speed_mps": wind_speed,
+        "weather_state": row.get("sk_s", ""),
+        "aqi": row.get("pm_aqi"),
+        "aqi_level": row.get("pm_q", ""),
+        "rain_1h_mm": rain_1h,
+        "rain_5m_mm": rain_5m,
+        "rain_2h_message": "",
+        "rain_2h_flag": 0,
+        "hourly_forecast": [],
+        "seven_day_forecast": [],
     }
+
+    # 2. Extract forecasts from API 2
+    if grid_data:
+        rain_dto = grid_data.get("nowTwoHourResDto", {})
+        station_realtime["rain_2h_message"] = rain_dto.get("message", "")
+        station_realtime["rain_2h_flag"] = rain_dto.get("rainFlag", 0)
+
+        # Extract 7-day forecast
+        seven_day = []
+        for item in grid_data.get("sevenDayWeatherForecast", [])[:7]:
+            if isinstance(item, dict):
+                max_t = item.get("maxTemperature")
+                min_t = item.get("minTemperature")
+                is_placeholder = (
+                    (max_t is None or max_t == 0)
+                    and (min_t is None or min_t == 0)
+                    and item.get("weather", "") == "晴"
+                    and item.get("windDirection", "") == "西北风"
+                )
+                if is_placeholder:
+                    if item.get("dateOrRimeTagStr", "") not in ("昨天", "今天"):
+                        continue
+                seven_day.append(
+                    {
+                        "date": item.get("dateOrRimeStr", ""),
+                        "label": item.get("dateOrRimeTagStr", ""),
+                        "weather_day": item.get("weather", ""),
+                        "weather_night": item.get("eveningWeather", ""),
+                        "temp_max": max_t,
+                        "temp_min": min_t,
+                        "wind_dir": item.get("windDirection", ""),
+                        "wind_power": item.get("windPowerLevel", ""),
+                    }
+                )
+        station_realtime["seven_day_forecast"] = seven_day
+
+        # Extract upcoming hourly forecast
+        hourly = []
+        for item in grid_data.get("oneDay24WeatherForecast", [])[:24]:
+            if isinstance(item, dict):
+                temp_val = item.get("temperature")
+                is_placeholder = (
+                    (temp_val is None or temp_val == 0)
+                    and item.get("weather", "") == "晴"
+                    and item.get("windDirection", "") == "西北风"
+                )
+                if is_placeholder:
+                    continue
+                hourly.append(
+                    {
+                        "time": item.get("dateOrRimeStr", ""),
+                        "weather": item.get("weather", ""),
+                        "temp": temp_val,
+                        "wind_dir": item.get("windDirection", ""),
+                        "wind_power": item.get("windPowerLevel", ""),
+                    }
+                )
+        station_realtime["hourly_forecast"] = hourly[:12]
+
+    return station_realtime
 
 
 def build_report(
@@ -685,7 +767,7 @@ def build_report(
 ) -> dict[str, Any]:
     latest = frames[-1]
     height, width = latest.dbz.shape
-    grid_realtime = extract_grid_realtime(grid_data)
+    grid_realtime = extract_station_and_forecast_data(row, grid_data)
     mask = court_mask(bounds, width, height)
     dx, dy, motion_consistency = estimate_motion(frames)
 
@@ -777,6 +859,9 @@ def build_report(
         else Path("output/radar_frames")
     )
     radar_frame_entries = save_radar_frames(frames, bounds, mask, frames_dir)
+    contact_sheet = create_radar_contact_sheet(
+        radar_frame_entries, frames_dir.parent / "radar_contact_sheet.jpg"
+    )
 
     court_x, court_y = lon_lat_to_pixel(
         COURT["lon"], COURT["lat"], bounds, width, height
@@ -800,6 +885,7 @@ def build_report(
             "court_pixel": {"x": round(court_x, 2), "y": round(court_y, 2)},
             "sample_pixels_in_5km_radius": int(mask.sum()),
             "debug_image": debug_image,
+            "radar_contact_sheet": contact_sheet,
         },
         "motion": {
             "dx_pixels_per_6min": round(dx, 3),
@@ -822,6 +908,14 @@ def build_report(
         "diagnostics": diagnostics,
         "frame_quality": [round(q, 2) for q in quality_scores],
         "station_realtime": grid_realtime,
+        "playability": compute_playability(
+            rain_probability=rain_probability,
+            risk_scores=risk_scores,
+            grid_realtime=grid_realtime,
+            qpf_has_rain=qpf_has_rain_any,
+            rain_flag=rain_flag,
+            current_stats=current_stats,
+        ),
         **official_summary(row),
     }
     return report

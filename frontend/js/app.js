@@ -138,6 +138,26 @@ function updateForecastUI(data) {
         setText('rt-humidity', `${rt.humidity_pct ?? '--'}%`);
         setText('rt-wind', `${rt.wind_direction || ''} ${rt.wind_power_level || ''}`);
         setText('rt-state', `${rt.weather_state || '--'} / AQI ${rt.aqi ?? '--'}`);
+        
+        let rainHtml = '--';
+        if (rt.rain_1h_mm !== undefined && rt.rain_5m_mm !== undefined) {
+            rainHtml = `
+                <div style="display:flex; align-items:center; gap:12px;">
+                    <div style="display:flex; align-items:center; gap:4px;">
+                        <span style="font-size:var(--fs-xs);color:var(--color-text-muted);">5m</span>
+                        <span style="font-weight:600;">${rt.rain_5m_mm}</span><span style="font-size:var(--fs-xs);color:var(--color-text-muted);">mm</span>
+                    </div>
+                    <div style="display:flex; align-items:center; gap:4px;">
+                        <span style="font-size:var(--fs-xs);color:var(--color-text-muted);">1h</span>
+                        <span style="font-weight:600;">${rt.rain_1h_mm}</span><span style="font-size:var(--fs-xs);color:var(--color-text-muted);">mm</span>
+                    </div>
+                </div>
+            `;
+        } else if (rt.rain_1h_mm !== undefined) {
+            rainHtml = `${rt.rain_1h_mm}mm`;
+        }
+        document.getElementById('rt-rain').innerHTML = rainHtml;
+        setText('rt-station', rt.station_name ? `${rt.station_name} (${Math.round(rt.distance_m)}m)` : '--');
         if (rt.hourly_forecast?.length) renderHourly(rt.hourly_forecast);
         if (rt.seven_day_forecast?.length) {
             renderWeek(rt.seven_day_forecast);
@@ -158,25 +178,38 @@ function updateForecastUI(data) {
         const dbz30 = data.max_dbz_nearby['30min'] ?? '--';
         const dbzEl = document.getElementById('kpi-dbz');
         if (dbzEl) {
-            dbzEl.textContent = dbz30;
+            const visual = data.radar_visual_qa || {};
+            const patternLabel = {
+                none: '无',
+                trace: '零散',
+                scattered_weak: '弱散',
+                organized_band: '雨带',
+                convective_cells: '对流',
+                unknown: '--',
+            }[visual.echo_pattern] || (dbz30 >= 35 ? '明显' : dbz30 >= 20 ? '弱' : '无');
+            dbzEl.textContent = patternLabel;
             dbzEl.style.color = dbz30 >= 35 ? 'var(--red)' : dbz30 >= 20 ? 'var(--amber)' : 'var(--green)';
         }
     }
-    if (data.playable_coverage_ratio) {
-        const cov = data.playable_coverage_ratio['30min'];
-        const covEl = document.getElementById('kpi-coverage');
-        if (covEl && cov != null) {
-            const pct = ((1 - cov) * 100).toFixed(0);
-            covEl.textContent = `${pct}%`;
-            covEl.style.color = pct >= 90 ? 'var(--green)' : pct >= 70 ? 'var(--amber)' : 'var(--red)';
-        }
+    // Playability score (new multi-factor system)
+    if (data.playability) {
+        _playabilityData = data.playability;
+        _playabilityHorizon = '30min'; // default to 30min view
+        renderPlayabilityKPI(data.playability, '30min');
+        initPlayabilityPanel(data.playability);
     }
     if (data.booking) {
-        const rh = data.booking.window_hourly_rain_count ?? '--';
-        const rhEl = document.getElementById('kpi-rain-hrs');
+        const nextRain = data.booking.next_rain_time || '--';
+        const rhEl = document.getElementById('kpi-next-rain');
         if (rhEl) {
-            rhEl.textContent = `${rh}h`;
-            rhEl.style.color = rh === 0 ? 'var(--green)' : rh <= 1 ? 'var(--amber)' : 'var(--red)';
+            rhEl.textContent = nextRain;
+            if (nextRain.includes('无雨')) {
+                rhEl.style.color = 'var(--green)';
+            } else if (nextRain.includes('正在下雨')) {
+                rhEl.style.color = 'var(--red)';
+            } else {
+                rhEl.style.color = 'var(--amber)';
+            }
         }
     }
 
@@ -191,7 +224,18 @@ function updateForecastUI(data) {
             updRisk(m, p, c);
         });
     }
-    if (data.motion) setText('motion-consistency', data.motion.consistency.toFixed(3));
+    if (data.motion) {
+        const visual = data.radar_visual_qa || {};
+        const qaLabel = {
+            down: '参考有限',
+            neutral: '常规参考',
+            up: '较可信',
+        }[visual.radar_confidence_adjustment] || '常规参考';
+        const motionText = visual.motion_readable === false
+            ? '参考有限'
+            : `${qaLabel}${visual.reason_cn ? ` · ${visual.reason_cn}` : ''}`;
+        setText('motion-consistency', motionText);
+    }
 
     // Radar Timeline Player
     if (data.radar_frames?.length) {
@@ -461,6 +505,7 @@ function updateDiagnosisUI(data) {
                 if (rules[key] && !isNaN(n)) return rules[key](n);
                 // String-based rules
                 if (key === '上游等级') return { none: 'good', trace: 'good', weak: 'warn', organized: 'bad', strong: 'bad' }[rawVal] || 'warn';
+                if (key === '雷达可信度') return { '参考有限': 'good', '常规参考': '', '较可信': 'warn' }[rawVal] || '';
                 if (key === '短临标志') return rawVal === '无雨' ? 'good' : 'bad';
                 if (key === '覆盖时长') return 'good';
                 if (key === '今日白天' || key === '今夜') return /雨|雷/.test(rawVal) ? 'bad' : /阴|云/.test(rawVal) ? 'warn' : 'good';
@@ -471,12 +516,15 @@ function updateDiagnosisUI(data) {
             const f = _forecastData || {};
             const st = f.station_realtime || {};
             const cur = f.current || {};
+            const radarQa = f.radar_visual_qa || {};
+            const radarQaLabel = { down: '参考有限', neutral: '常规参考', up: '较可信' }[radarQa.radar_confidence_adjustment] || null;
             const radarMetrics = [
-                cur.max_dbz_nearby != null ? { k: '最大回波', v: `${cur.max_dbz_nearby} dBZ` } : null,
+                cur.max_dbz_nearby != null ? { k: '最大回波', v: `${cur.max_dbz_nearby}` } : null,
                 cur.echo_coverage != null ? { k: '回波覆盖', v: `${(cur.echo_coverage * 100).toFixed(1)}%` } : null,
                 cur.playable_coverage != null ? { k: '可雨覆盖', v: `${(cur.playable_coverage * 100).toFixed(1)}%` } : null,
-                f.upstream_echo?.upstream_max_dbz != null ? { k: '上游最大', v: `${f.upstream_echo.upstream_max_dbz} dBZ` } : null,
+                f.upstream_echo?.upstream_max_dbz != null ? { k: '上游最大', v: `${f.upstream_echo.upstream_max_dbz}` } : null,
                 f.upstream_echo?.upstream_level ? { k: '上游等级', v: f.upstream_echo.upstream_level } : null,
+                radarQaLabel ? { k: '雷达可信度', v: radarQa.motion_readable === false ? '参考有限' : radarQaLabel } : null,
             ].filter(Boolean);
 
             const qpfMetrics = [
@@ -502,7 +550,7 @@ function updateDiagnosisUI(data) {
             // Chip key → Lucide icon mapping
             const chipIcon = {
                 '最大回波': 'signal', '回波覆盖': 'scan', '可雨覆盖': 'cloud-rain',
-                '上游最大': 'arrow-up-right', '上游等级': 'layers',
+                '上游最大': 'arrow-up-right', '上游等级': 'layers', '雷达可信度': 'activity',
                 '覆盖时长': 'timer', '最大降雨量': 'droplets', '短临标志': 'flag',
                 '气温': 'thermometer', '湿度': 'droplet', '风速': 'wind', 'AQI': 'leaf',
                 '今日白天': 'sun', '今夜': 'moon',
@@ -702,7 +750,7 @@ function renderQPFChart(qpf) {
         <line x1="0" y1="${H - (2.5/maxR)*(H-4)}" x2="${W}" y2="${H - (2.5/maxR)*(H-4)}" stroke="rgba(100,116,139,0.1)" stroke-dasharray="2 3"/>
         <line x1="0" y1="${H - (5/maxR)*(H-4)}" x2="${W}" y2="${H - (5/maxR)*(H-4)}" stroke="rgba(100,116,139,0.08)" stroke-dasharray="2 3"/>
         <line x1="0" y1="${H - (7.5/maxR)*(H-4)}" x2="${W}" y2="${H - (7.5/maxR)*(H-4)}" stroke="rgba(100,116,139,0.1)" stroke-dasharray="2 3"/>`
-        : `<line x1="0" y1="${H - 8}" x2="${W}" y2="${H - 8}" stroke="rgba(59,130,246,0.45)" stroke-width="1"/>`;
+        : '';
 
     // Gradient fill — clean chart, no text
     svg.innerHTML = `
@@ -729,6 +777,133 @@ function renderQPFChart(qpf) {
             timesEl.innerHTML += `<span>${t}</span>`;
         }
     }
+}
+// ─── Playability Score System ───
+let _playabilityData = null;
+let _playabilityHorizon = '30min';
+
+function renderPlayabilityKPI(pb, horizon) {
+    const h = pb[horizon];
+    if (!h) return;
+    const covEl = document.getElementById('kpi-coverage');
+    const gradeEl = document.getElementById('kpi-grade');
+    if (covEl) {
+        covEl.textContent = h.vetoed ? '0' : `${h.score}`;
+        const scoreColor = h.vetoed ? 'var(--red)'
+            : h.score >= 70 ? 'var(--green)'
+            : h.score >= 40 ? 'var(--amber)' : 'var(--red)';
+        covEl.style.color = scoreColor;
+    }
+    if (gradeEl) {
+        gradeEl.textContent = h.grade;
+        gradeEl.className = 'hero-kpi-grade' + (h.vetoed ? ' grade-veto' : h.score >= 70 ? ' grade-good' : h.score >= 40 ? ' grade-warn' : ' grade-bad');
+    }
+}
+
+function initPlayabilityPanel(pb) {
+    const card = document.getElementById('kpi-playability-card');
+    const panel = document.getElementById('playability-detail');
+    const toggleBtn = document.getElementById('playability-toggle-btn');
+    if (!card || !panel || !toggleBtn) return;
+
+    let _playabilityOpen = false;
+
+    // Toggle expand/collapse
+    const toggle = (e) => {
+        if (e) e.stopPropagation();
+        _playabilityOpen = !_playabilityOpen;
+        panel.setAttribute('aria-hidden', !_playabilityOpen);
+        card.setAttribute('aria-expanded', _playabilityOpen);
+        card.classList.toggle('expanded', _playabilityOpen);
+        if (_playabilityOpen) renderPlayabilityBreakdown(pb, _playabilityHorizon);
+        if (typeof lucide !== 'undefined') lucide.createIcons();
+    };
+    
+    toggleBtn.onclick = toggle;
+    panel.onclick = (e) => e.stopPropagation(); // prevent closing when clicking inside
+    toggleBtn.onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(e); } };
+
+    // click outside to close
+    document.addEventListener('click', (e) => {
+        if (_playabilityOpen && !toggleBtn.contains(e.target) && !panel.contains(e.target)) {
+            _playabilityOpen = false;
+            card.setAttribute('aria-expanded', 'false');
+            card.classList.remove('expanded');
+            panel.setAttribute('aria-hidden', 'true');
+        }
+    });
+
+    // Horizon tabs
+    const tabsEl = document.getElementById('pb-horizon-tabs');
+    if (tabsEl) {
+        const horizons = [
+            { key: '30min', label: '30分钟' },
+            { key: '60min', label: '60分钟' },
+            { key: '120min', label: '120分钟' },
+        ];
+        tabsEl.innerHTML = horizons.map(h =>
+            `<button class="pb-tab${h.key === _playabilityHorizon ? ' active' : ''}" data-hz="${h.key}">${h.label}</button>`
+        ).join('');
+        tabsEl.querySelectorAll('.pb-tab').forEach(btn => {
+            btn.onclick = (e) => {
+                e.stopPropagation();
+                _playabilityHorizon = btn.dataset.hz;
+                renderPlayabilityKPI(pb, _playabilityHorizon);
+                renderPlayabilityBreakdown(pb, _playabilityHorizon);
+                tabsEl.querySelectorAll('.pb-tab').forEach(b => b.classList.toggle('active', b.dataset.hz === _playabilityHorizon));
+            };
+        });
+    }
+}
+
+function renderPlayabilityBreakdown(pb, horizon) {
+    const h = pb[horizon];
+    if (!h) return;
+
+    const vetoEl = document.getElementById('pb-veto');
+    const factorsEl = document.getElementById('pb-factors');
+    if (!vetoEl || !factorsEl) return;
+
+    if (h.vetoed) {
+        vetoEl.style.display = 'flex';
+        vetoEl.innerHTML = `<i data-lucide="octagon-alert" style="width:16px;height:16px;flex-shrink:0;"></i><span>${h.veto_reason}</span>`;
+        factorsEl.innerHTML = '<div class="pb-veto-note">各项评分已暂停，待条件改善后恢复</div>';
+        if (typeof lucide !== 'undefined') lucide.createIcons();
+        return;
+    }
+
+    vetoEl.style.display = 'none';
+    const bd = h.breakdown;
+    const order = ['rain', 'thermal', 'nowcast', 'wind', 'aqi'];
+
+    factorsEl.innerHTML = order.map(k => {
+        const f = bd[k];
+        if (!f) return '';
+        const barColor = f.score >= 70 ? 'var(--green)' : f.score >= 40 ? 'var(--amber)' : 'var(--red)';
+        const weightPct = (f.weight * 100).toFixed(0);
+        return `
+            <div class="pb-factor">
+                <div class="pb-factor-top">
+                    <span class="pb-factor-icon"><i data-lucide="${f.icon}"></i></span>
+                    <span class="pb-factor-label">${f.label}</span>
+                    <span class="pb-factor-weight">×${weightPct}%</span>
+                    <span class="pb-factor-score" style="color:${barColor}">${f.score}</span>
+                </div>
+                <div class="pb-bar-track"><div class="pb-bar-fill" style="width:${f.score}%;background:${barColor}"></div></div>
+                <div class="pb-factor-desc">${f.desc}</div>
+            </div>`;
+    }).join('');
+
+    // Total
+    factorsEl.innerHTML += `
+        <div class="pb-total">
+            <span class="pb-total-label">综合可打球概率</span>
+            <span class="pb-total-score" style="color:${h.score >= 70 ? 'var(--green)' : h.score >= 40 ? 'var(--amber)' : 'var(--red)'}">${h.score}<small>/100</small></span>
+            <span class="pb-total-grade">${h.grade}</span>
+        </div>
+    `;
+
+    if (typeof lucide !== 'undefined') lucide.createIcons();
 }
 
 // ─── Init ───

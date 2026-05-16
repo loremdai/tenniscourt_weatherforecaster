@@ -80,19 +80,33 @@
                     <div class="hero-kpi">
                         <i data-lucide="radar" style="width:14px;height:14px;" class="kpi-ico"></i>
                         <span class="hero-kpi-val" id="kpi-dbz">--</span>
-                        <span class="hero-kpi-lbl">雷达 dBZ</span>
+                        <span class="hero-kpi-lbl">附近回波</span>
                     </div>
-                    <div class="hero-kpi">
+                    <div class="hero-kpi hero-kpi-playability" id="kpi-playability-card" role="button" tabindex="0" aria-expanded="false" aria-controls="playability-detail">
                         <i data-lucide="shield-check" style="width:14px;height:14px;" class="kpi-ico"></i>
                         <span class="hero-kpi-val" id="kpi-coverage">--</span>
-                        <span class="hero-kpi-lbl">可打率</span>
+                        <span class="hero-kpi-grade" id="kpi-grade"></span>
+                        <span class="hero-kpi-lbl">
+                            可打球概率 <span id="playability-toggle-btn" style="cursor:pointer; padding: 2px 4px; margin-left: 2px; border-radius: 4px; transition: background 0.2s;"><i data-lucide="chevron-down" class="kpi-chevron" style="width:14px;height:14px;vertical-align:middle;"></i></span>
+                        </span>
+                        <!-- Playability Breakdown Panel -->
+                        <div class="playability-detail" id="playability-detail">
+                            <div class="pb-header">
+                                <span class="pb-title"><i data-lucide="bar-chart-3" style="width:13px;height:13px;"></i>可打球概率评分明细</span>
+                                <div class="pb-horizon-tabs" id="pb-horizon-tabs"></div>
+                            </div>
+                            <div class="pb-veto" id="pb-veto" style="display:none;"></div>
+                            <div class="pb-factors" id="pb-factors"></div>
+                        </div>
                     </div>
                     <div class="hero-kpi">
                         <i data-lucide="cloud-rain-wind" style="width:14px;height:14px;" class="kpi-ico"></i>
-                        <span class="hero-kpi-val" id="kpi-rain-hrs">--</span>
-                        <span class="hero-kpi-lbl">窗口雨时</span>
+                        <span class="hero-kpi-val" id="kpi-next-rain" style="font-size: var(--fs-md);">--</span>
+                        <span class="hero-kpi-lbl">预计降雨</span>
                     </div>
                 </div>
+
+
 
                 <!-- QPF Rain Chart -->
                 <div class="hero-rain-chart">
@@ -108,10 +122,12 @@
         <div class="card g-cond">
             <div class="stitle"><span class="left"><i data-lucide="thermometer-sun"></i>实时气象</span></div>
             <div class="cond-grid">
+                <div class="cond-item"><div class="cond-ico"><i data-lucide="map-pin"></i></div><div><div class="cond-lbl">观测站</div><div class="cond-val sm" id="rt-station" style="font-size: var(--fs-xs); font-weight: normal; word-break: break-all; font-family: inherit;">--</div></div></div>
                 <div class="cond-item"><div class="cond-ico"><i data-lucide="thermometer"></i></div><div><div class="cond-lbl">温度</div><div class="cond-val" id="rt-temp">--°C</div></div></div>
                 <div class="cond-item"><div class="cond-ico"><i data-lucide="droplets"></i></div><div><div class="cond-lbl">湿度</div><div class="cond-val" id="rt-humidity">--%</div></div></div>
                 <div class="cond-item"><div class="cond-ico"><i data-lucide="wind"></i></div><div><div class="cond-lbl">风力</div><div class="cond-val sm" id="rt-wind">--</div></div></div>
                 <div class="cond-item"><div class="cond-ico"><i data-lucide="sun"></i></div><div><div class="cond-lbl">天气</div><div class="cond-val sm" id="rt-state">--</div></div></div>
+                <div class="cond-item"><div class="cond-ico"><i data-lucide="cloud-rain"></i></div><div><div class="cond-lbl" style="display:flex;align-items:center;">历史降水量<span class="info-tip" style="margin-left:4px;"><i data-lucide="info" style="width:11px;height:11px;"></i><span class="info-tip-text" style="width:220px;text-transform:none;letter-spacing:normal;">气象站传感器的真实测量值，反映过去5分钟和1小时内累积落到地面的雨水。</span></span></div><div class="cond-val sm" id="rt-rain">--</div></div></div>
             </div>
         </div>
 
@@ -145,10 +161,10 @@
                 </div>
             </div>
             <div class="motion-ft">
-                <i data-lucide="activity" style="width:12px;height:12px;"></i>光流一致性: <span id="motion-consistency">--</span>
+                <i data-lucide="activity" style="width:12px;height:12px;"></i>雷达趋势可信度: <span id="motion-consistency">--</span>
                 <span class="info-tip">
                     <i data-lucide="info" style="width:11px;height:11px;"></i>
-                    <span class="info-tip-text">光流一致性表示雷达回波运动方向的稳定程度，值越接近1说明云团运动越规律，预测越可靠。低于0.8时预测不确定性较大。</span>
+                    <span class="info-tip-text">雷达趋势可信度综合雷达图像质量、回波组织化程度和移动趋势。若回波零散或无可追踪目标，本轮雷达只作为弱参考。</span>
                 </span>
             </div>
         </div>
@@ -193,7 +209,7 @@
 
         <!-- 7: Radar Timeline Player -->
         <div class="card g-radar">
-            <div class="stitle"><span class="left"><i data-lucide="radar"></i>雷达回波 (5km)</span><span class="radar-time" id="radar-current-time">--:--</span></div>
+            <div class="stitle"><span class="left"><i data-lucide="radar"></i>附近回波 (7km)</span><span class="radar-time" id="radar-current-time">--:--</span></div>
             <div class="radar-wrap"><img id="radar-image" src="" alt="CAPPI Radar" loading="lazy"></div>
             <div class="radar-controls" id="radar-controls">
                 <button class="radar-btn" id="radar-play-btn" title="播放/暂停"><i data-lucide="play"></i></button>

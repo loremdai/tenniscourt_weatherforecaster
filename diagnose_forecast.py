@@ -30,15 +30,22 @@ PROMPT_TEMPLATE = """\
 5. 不要把雷达回波等同于地面降雨。雷达表示空中降水粒子/回波强度，是否落地需结合官方 QPF、湿度、实况天气等判断。
 6. 官方短临 QPF 是主判据；雷达 CAPPI 用于路径、强度、趋势和突发新生监测；格点实况用于判断低层环境；逐小时/逐日预报只用于背景风险。
 7. 输出必须是纯净合法 JSON，不要包含 Markdown 代码块，不要输出解释性前后缀。
+8. **独立预定决策权**：输入数据中包含 `booking_meta`（目标时间、倒计时、窗口等）。你必须作为最终决策者，基于所有环境特征独立生成预约决策（`booking` 对象）。
+
+预定决策标准（请参考）：
+- **0-2h (马上开打)**：如果实况/雷达确认有雨，坚决建议取消（suggest_cancel）；如果全无雨，建议保留（keep_booking）；如果有零星风险，建议保留但赛前复查（keep_but_recheck）。
+- **2-6h (几小时后)**：雷达权重降低，主要看逐小时预报。若打球时段内有大面积雨，建议取消；若短时风险较低，建议保留赛前复查；若有阵雨背景，建议观望（wait_and_see）。
+- **6h+ (较远期)**：属于纯背景预测，结论通常为“仅供背景参考”（background_only）或“观望”（wait_and_see），并给出未来复查时间。
 
 可用数据源说明：
-- radar/cappi：最近 6 帧雷达回波、球场 5km 范围回波、光流外推、30/60/120 分钟风险概率、趋势信号。
+- radar/cappi：最近 6 帧雷达回波、球场 7km 范围回波、来向趋势、30/60/120 分钟风险概率、趋势信号。
+- radar_visual_qa：多模态雷达视觉审查，只用于判断雷达图像质量、回波形态和雷达证据可信度，不是最终天气判据。
 - qpf6min：官方 0-2 小时逐 6 分钟降雨预报，共约 21 个时间点。
-- grid_now 或 realtime：球场坐标格点实况，包括温度、湿度、风向、风速、天气状态、AQI 等。
+- grid_now / station_realtime：球场附近气象站实况，包括雨量计（rain_1h_mm, rain_5m_mm）、温度、湿度、风向、风速、天气状态、AQI 等。
 - official_nowcast_secondary：第二官方短临信源，包括 rainFlag 和短临文案。
 - hourly_forecast：未来 12 小时逐小时预报。
 - daily_forecast：未来 7 天逐日预报。
-- station 或 rain_gauge：如果输入中存在真实气象站雨量计字段，则优先使用；如果不存在，不得声称"雨量计确认"。
+- booking_meta：预约目标时间、打球窗口、距离开场时间。
 
 华南沿海经验阈值，作为初始判断依据，后续可根据实测回测微调：
 - 湿度 < 70%：弱回波较难落地成雨。
@@ -78,16 +85,18 @@ PROMPT_TEMPLATE = """\
 - 雷达 0 dBZ 或 coverage=0 时，应写"未探测到有效降水回波"，不得写"空中无降水粒子"。
 - 没有真实雨量计、摄像头、人工反馈或场地传感器时，不得断言"球场已经干燥""地面干燥"或"地面无湿滑风险"；只能写"短时内因降雨变湿的风险低"。
 - 官方 QPF 全 0 且 rainFlag=0 时，应写"官方短临一致支持低风险判断"，不得写"完全排除降雨可能"。
-- 光流一致性只在存在可追踪回波时才用于运动判断；当 max_dBZ=0 或 coverage=0 时，应写"无可追踪回波，光流本次参考价值有限"。
+- 雷达趋势可信度只在存在可追踪回波时才用于运动判断；当 max_dBZ=0 或 coverage=0 时，应写"无可追踪回波，本次雷达趋势参考有限"。
 - 风力描述应写"对发球抛球和高球影响预计较小"，不得写"对比赛无实质影响"或"无影响"。
 - 结论要面向打球决策，允许给出"可打"，但风险说明应保留短临不确定性。
 - upstream_level 为 trace 时，只能作为关注点提及，不应明显抬高风险描述。
+- radar_visual_qa 显示 quality=bad、motion_readable=false 或 radar_confidence_adjustment=down 时，必须降低雷达证据权重，不能把雷达外推作为高置信依据。
+- radar_visual_qa 显示 trace 或 scattered_weak 时，只能描述为零散弱信号，不得写成明确雨带逼近。
 
-时间尺度约束（当输入中包含 booking 字段时严格遵守）：
-- 当前 QPF6min 只覆盖未来约 2 小时。如果 booking.target_time 距当前超过 2 小时，不得把 QPF 结论直接外推到预约时段。
+时间尺度约束（严格遵守 booking_meta 字段）：
+- 当前 QPF6min 只覆盖未来约 2 小时。如果 booking_meta.target_time 距当前超过 2 小时，不得把 QPF 结论直接外推到预约时段。
 - QPF 只能说明当前至未来 2 小时的降雨情况，不能说明预约时段一定无雨。
-- 对预约时段的降雨判断应主要引用 hourly_forecast 和 booking.reason。
-- 如果 booking.lead_time_band 为 2-6h 或 6h+，结论中必须包含赛前复查建议（引用 booking.check_again_at）。
+- 对预约时段的降雨判断应主要引用 hourly_forecast。
+- 如果 booking_meta.lead_time_band 为 2-6h 或 6h+，结论和 booking 中必须包含赛前复查建议。
 - 雷达外推对超过 30 分钟后的新生对流能力有限，距开场超过 2 小时时应明确说明雷达参考价值下降。
 - 不得写当前至夜晚都适合打球，应写当前短临无雨，预约时段逐小时预报无雨，建议保留预约但需赛前复查。
 
@@ -96,9 +105,9 @@ JSON 合法性要求：
 - 字符串值内部不得出现未转义的英文双引号。引用天气状态等值时使用中文引号或单引号。
 - 不要输出模型思考过程、Markdown 代码块、解释性前后缀，只输出纯 JSON 对象。
 
-用户可读性约束（对 data_summary、risk_assessment、conclusion 严格执行）：
-- 这三个区块面向普通网球爱好者，禁止出现任何英文技术术语、变量名或原始数值编码。
-- 严禁出现的词汇/格式：dBZ、QPF、QPF6min、rainFlag、coverage、playable_coverage、echo_coverage、motion_consistency、max_dbz、upstream_max_dbz、trend_3、trend_6、cappi、grid_now、secondary、rain_2h_flag、risk_scores、optical flow、bad_frame、low_quality_frame 等。
+用户可读性约束（对 data_summary、risk_assessment、conclusion、booking 严格执行）：
+- 这些区块面向普通网球爱好者，禁止出现任何英文技术术语、变量名或原始数值编码。
+- 严禁出现的词汇/格式：dBZ、QPF、QPF6min、rainFlag、coverage、playable_coverage、echo_coverage、motion_consistency、max_dbz、upstream_max_dbz、trend_3、trend_6、cappi、grid_now、secondary、rain_2h_flag、risk_scores、optical flow、光流、bad_frame、low_quality_frame 等。
 - 数值引用方式：不要写"max_dBZ=30"，而是写"附近有弱降水云团"；不要写"coverage=0.014"，而是写"覆盖面积很小"；不要写"QPF6min全程为0"，而是写"官方短期预报显示未来2小时无雨"。
 - 用自然语言替代示例：
   · "QPF6min 全 0" → "官方预报显示未来2小时无降雨"
@@ -119,6 +128,13 @@ JSON 合法性要求：
 
 输出 JSON 结构必须严格如下：
 {{
+  "booking": {{
+    "decision": "必须是以下枚举之一：keep_booking | keep_but_recheck | wait_and_see | suggest_cancel | background_only",
+    "decision_cn": "用中文写出最终的预约建议短语，例如：'保留预约，可以出发'或'建议取消或改期'",
+    "check_again_at": "给出一个具体的复查时间字符串，例如：'18:30'，如果是较远期可以写两个如'16:00 和 18:00'",
+    "reason": ["理由1 (例如：当前无降雨风险)", "理由2"],
+    "caveat": ["注意事项1 (例如：夏季阵雨随时出现，带好雨具)"]
+  }},
   "data_summary": {{
     "radar": "用通俗语言描述雷达回波情况。例如：'球场附近有少量弱降水云团经过，但面积很小，不太可能造成实际降雨'。禁止出现 dBZ、coverage 等术语。",
     "official_forecast": "用通俗语言概括官方预报结论。例如：'两个官方预报源都认为未来2小时不会下雨'。",
@@ -234,10 +250,11 @@ def extract_context(forecast: dict[str, Any]) -> dict[str, Any]:
         "trends": forecast.get("trends"),
         "upstream_echo": forecast.get("upstream_echo"),
         "frame_quality": forecast.get("frame_quality"),
+        "radar_visual_qa": forecast.get("radar_visual_qa"),
         # Rule engine pre-computed risk scores (LLM should reference, not override)
         "risk_scores": forecast.get("risk_scores"),
-        # Layer 3: Grid realtime (precise at court coordinates)
-        "grid_realtime": {
+        # Layer 3: Station/Grid realtime
+        "station_realtime": {
             "source": station.get("source"),
             "temperature": station.get("temperature"),
             "humidity_pct": station.get("humidity_pct"),
@@ -247,8 +264,11 @@ def extract_context(forecast: dict[str, Any]) -> dict[str, Any]:
             "weather_state": station.get("weather_state"),
             "aqi": station.get("aqi"),
             "aqi_level": station.get("aqi_level"),
+            "rain_1h_mm": station.get("rain_1h_mm"),
+            "rain_5m_mm": station.get("rain_5m_mm"),
             "observation_time": station.get("observation_time"),
         },
+        "playability": forecast.get("playability"),
         # Layer 4: Background forecasts
         "hourly_forecast": station.get("hourly_forecast", []),
         "seven_day_forecast": station.get("seven_day_forecast", []),
@@ -257,11 +277,14 @@ def extract_context(forecast: dict[str, Any]) -> dict[str, Any]:
 
 BANNED_PHRASES = [
     "完全无风险",
+    "完全没有雨",
     "绝对不会",
+    "绝对安全",
     "完全排除",
     "空中无降水粒子",
     "无任何降雨威胁",
     "球场保持干燥",
+    "地面干燥",
     "地面干燥，无湿滑风险",
     "无任何降水回波",
     "对比赛无实质影响",
