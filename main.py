@@ -69,9 +69,33 @@ from risk_engine import (
 )
 from diagnose_forecast import extract_context, PROMPT_TEMPLATE, check_banned_phrases
 
+# Langfuse LLM observability
+try:
+    from langfuse import observe as _langfuse_observe
+    from langfuse import Langfuse, get_client as _get_langfuse_client
 
-LLM_BASE_URL = "https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1"
-RADAR_VISION_MODEL = "qwen3.6-plus"
+    _langfuse = Langfuse()
+    _LANGFUSE_AVAILABLE = _langfuse.auth_check()
+    if _LANGFUSE_AVAILABLE:
+        print("Langfuse LLM observability: enabled", flush=True)
+    else:
+        print("Langfuse: auth check failed, running without observability.", flush=True)
+except Exception:
+    _LANGFUSE_AVAILABLE = False
+    _langfuse = None
+
+    def _langfuse_observe(*args, **kwargs):  # noqa: F811 – fallback no-op decorator
+        if args and callable(args[0]):
+            return args[0]
+
+        def _wrap(fn):
+            return fn
+
+        return _wrap
+
+
+LLM_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+RADAR_VISION_MODEL = "deepseek-v4-pro"
 
 RADAR_VISUAL_QA_FALLBACK = {
     "quality": "unknown",
@@ -218,10 +242,10 @@ def run_llm_diagnosis(
 ) -> dict[str, Any] | None:
     """Run LLM diagnosis and return parsed result."""
     try:
-        from openai import OpenAI
+        from langfuse.openai import OpenAI
     except ImportError:
         print(
-            "Warning: openai package not installed, skipping LLM diagnosis.",
+            "Warning: langfuse/openai package not installed, skipping LLM diagnosis.",
             file=sys.stderr,
         )
         return None
@@ -240,7 +264,7 @@ def run_llm_diagnosis(
     print("Sending context to deepseek-v4-pro for analysis...", flush=True)
     try:
         completion = client.chat.completions.create(
-            model="glm-5",
+            model="glm-5.1",
             messages=[{"role": "user", "content": prompt}],
             extra_body={"enable_thinking": True},
             stream=True,
@@ -336,6 +360,24 @@ def run_llm_diagnosis(
             f"Warning: LLM used {len(banned)} banned phrase(s): {banned}",
             file=sys.stderr,
         )
+
+    # ---- Langfuse quality scoring ----
+    if _LANGFUSE_AVAILABLE and _langfuse:
+        try:
+            _langfuse.score_current_trace(
+                name="json_parse_success",
+                value=0.0 if "error" in parsed else 1.0,
+                comment="LLM output JSON parsed successfully"
+                if "error" not in parsed
+                else "JSON parse failed, used fallback",
+            )
+            _langfuse.score_current_trace(
+                name="banned_phrase_count",
+                value=float(len(banned)),
+                comment=f"Banned phrases: {banned}" if banned else "No banned phrases",
+            )
+        except Exception:
+            pass  # Non-critical: don't let scoring errors break the pipeline
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(
@@ -516,7 +558,7 @@ radar_confidence_adjustment: down | neutral | up
 """
 
     try:
-        from openai import OpenAI
+        from langfuse.openai import OpenAI
 
         image_bytes = Path(contact_sheet).read_bytes()
         image_url = "data:image/jpeg;base64," + base64.b64encode(image_bytes).decode(
@@ -585,6 +627,7 @@ def apply_radar_visual_qa_to_report(
     return risk_scores
 
 
+@_langfuse_observe(name="weather_forecast_cycle")
 def run_once(args: argparse.Namespace) -> None:
     """Single execution cycle: fetch → analyze → decide → diagnose."""
     now = datetime.now()
@@ -836,10 +879,22 @@ def main() -> int:
             except Exception as e:
                 ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 print(f"[{ts}] Error: {e}", file=sys.stderr)
+            # Flush Langfuse traces before sleeping
+            if _LANGFUSE_AVAILABLE and _langfuse:
+                try:
+                    _langfuse.flush()
+                except Exception:
+                    pass
             print(f"Waiting {args.interval} seconds...")
             time.sleep(args.interval)
     else:
         run_once(args)
+        # Flush Langfuse traces before exiting
+        if _LANGFUSE_AVAILABLE and _langfuse:
+            try:
+                _langfuse.flush()
+            except Exception:
+                pass
     return 0
 
 

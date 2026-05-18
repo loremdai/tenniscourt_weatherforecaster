@@ -13,7 +13,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from openai import OpenAI
+from langfuse.openai import OpenAI
 
 PROMPT_TEMPLATE = """\
 你是一位专业的华南沿海短临天气分析师，同时也是"科技四路文体公园"网球场的天气顾问。
