@@ -14,21 +14,21 @@ from typing import Any
 
 import numpy as np
 
-
-# --- Thresholds (FROZEN for calibration period) ---
-DBZ_NONE = 15
-DBZ_WEAK = 25
-DBZ_MODERATE = 35
-DBZ_STRONG = 45
-RH_LOW = 70.0
-RH_MID = 85.0
-RH_HIGH = 90.0
-
-TREND_WEIGHTS_6 = np.array([0.5, 0.7, 0.9, 1.1, 1.3, 1.5])
-TREND_WEIGHTS_3 = np.array([0.7, 1.0, 1.3])
-
-RAIN_KEYWORDS = {"小雨", "中雨", "大雨", "暴雨", "雷阵雨", "阵雨", "雷雨"}
-MIN_UPSTREAM_COVERAGE_25 = 0.02  # 2% minimum for meaningful upstream echo
+from config import (
+    DBZ_NONE,
+    DBZ_WEAK,
+    DBZ_MODERATE,
+    DBZ_STRONG,
+    RH_LOW,
+    RH_MID,
+    RH_HIGH,
+    TREND_WEIGHTS_6,
+    TREND_WEIGHTS_3,
+    RAIN_KEYWORDS,
+    MIN_UPSTREAM_COVERAGE_25,
+    PLAYABILITY_BASE_WEIGHTS,
+    PLAYABILITY_GRADE_TABLE,
+)
 
 
 # ---- 1. Frame Quality Control ----
@@ -989,14 +989,8 @@ def _score_nowcast(now_risk: int, conflicts: list[str] | None) -> tuple[int, str
     return s, desc
 
 
-# Default weights
-_BASE_WEIGHTS: dict[str, float] = {
-    "rain": 0.30,
-    "thermal": 0.30,
-    "nowcast": 0.15,
-    "wind": 0.15,
-    "aqi": 0.10,
-}
+# Default weights (imported from config)
+_BASE_WEIGHTS = PLAYABILITY_BASE_WEIGHTS
 
 
 def _dynamic_weights(
@@ -1040,14 +1034,8 @@ def _dynamic_weights(
     return w
 
 
-_GRADE_TABLE = [
-    (85, "极佳", "conditions_excellent"),
-    (70, "良好", "conditions_good"),
-    (55, "一般", "conditions_fair"),
-    (40, "较差", "conditions_poor"),
-    (25, "差", "conditions_bad"),
-    (0, "不宜", "conditions_unsuitable"),
-]
+# Grade table (imported from config)
+_GRADE_TABLE = PLAYABILITY_GRADE_TABLE
 
 
 def _grade(score: int) -> tuple[str, str]:

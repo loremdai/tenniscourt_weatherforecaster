@@ -15,6 +15,9 @@ from typing import Any
 
 from langfuse.openai import OpenAI
 
+from config import BANNED_PHRASES, LLM_BASE_URL, LLM_DIAGNOSIS_MODEL
+from llm_service import parse_llm_json, stream_llm_completion
+
 PROMPT_TEMPLATE = """\
 你是一位专业的华南沿海短临天气分析师，同时也是"科技四路文体公园"网球场的天气顾问。
 你的任务是基于输入的多源气象数据，为网球爱好者生成一份短临天气决策报告。报告重点不是泛泛描述天气，而是判断：
@@ -275,21 +278,7 @@ def extract_context(forecast: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-BANNED_PHRASES = [
-    "完全无风险",
-    "完全没有雨",
-    "绝对不会",
-    "绝对安全",
-    "完全排除",
-    "空中无降水粒子",
-    "无任何降雨威胁",
-    "球场保持干燥",
-    "地面干燥",
-    "地面干燥，无湿滑风险",
-    "无任何降水回波",
-    "对比赛无实质影响",
-    "完全排除降雨可能",
-]
+
 
 
 def check_banned_phrases(text: str) -> list[str]:
@@ -321,17 +310,16 @@ def main() -> int:
 
     client = OpenAI(
         api_key=args.api_key,
-        base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
+        base_url=LLM_BASE_URL,
     )
 
-    print("Sending context to deepseek-v4-pro for analysis...")
+    print(f"Sending context to {LLM_DIAGNOSIS_MODEL} for analysis...")
     messages = [{"role": "user", "content": prompt}]
 
     try:
         completion = client.chat.completions.create(
-            model="deepseek-v4-pro",
+            model=LLM_DIAGNOSIS_MODEL,
             messages=messages,
-            # Enable thinking mode (specific to DashScope implementation)
             extra_body={"enable_thinking": True},
             stream=True,
             stream_options={"include_usage": True},
@@ -340,76 +328,8 @@ def main() -> int:
         print(f"Failed to call Aliyun API: {e}", file=sys.stderr)
         return 1
 
-    reasoning_content = ""
-    answer_content = ""
-    is_answering = False
-
-    print("\n" + "=" * 20 + " 模型思考过程 " + "=" * 20 + "\n")
-
-    for chunk in completion:
-        if not chunk.choices:
-            if hasattr(chunk, "usage") and chunk.usage:
-                print("\n" + "=" * 20 + " Token 消耗 " + "=" * 20 + "\n")
-                print(chunk.usage)
-            continue
-
-        delta = chunk.choices[0].delta
-
-        # Collect and print reasoning content
-        if hasattr(delta, "reasoning_content") and delta.reasoning_content is not None:
-            if not is_answering:
-                sys.stdout.write(delta.reasoning_content)
-                sys.stdout.flush()
-                reasoning_content += delta.reasoning_content
-
-        # Collect and print answer content
-        if hasattr(delta, "content") and delta.content is not None:
-            if not is_answering:
-                print("\n\n" + "=" * 20 + " 分析报告 " + "=" * 20 + "\n")
-                is_answering = True
-            sys.stdout.write(delta.content)
-            sys.stdout.flush()
-            answer_content += delta.content
-
-    print("\n\n" + "=" * 50)
-
-    # Robust JSON extraction: find outermost { } pair
-    raw = answer_content.strip()
-    if raw.startswith("```"):
-        first_nl = raw.find("\n")
-        if first_nl > 0:
-            raw = raw[first_nl + 1:]
-        else:
-            raw = raw[3:]
-    if raw.endswith("```"):
-        raw = raw[:-3]
-    raw = raw.strip()
-
-    start_idx = raw.find("{")
-    end_idx = raw.rfind("}")
-    if start_idx >= 0 and end_idx > start_idx:
-        json_str = raw[start_idx:end_idx + 1]
-    else:
-        json_str = raw
-
-    try:
-        parsed_result = json.loads(json_str)
-    except json.JSONDecodeError as e:
-        print(f"Warning: Failed to parse LLM output as JSON: {e}", file=sys.stderr)
-        import re
-        fixed = re.sub(
-            r'(?<=[\u4e00-\u9fff])"(?=[\u4e00-\u9fff])',
-            '\u201c', json_str,
-        )
-        fixed = re.sub(
-            r'(?<=[\u4e00-\u9fff])"(?=[\u4e00-\u9fff,\u3002\uff0c])',
-            '\u201d', fixed,
-        )
-        try:
-            parsed_result = json.loads(fixed)
-            print("Salvage succeeded after fixing Chinese quotes.", file=sys.stderr)
-        except json.JSONDecodeError:
-            parsed_result = {"error": "JSON Parse Error", "raw_output": answer_content}
+    answer_content = stream_llm_completion(completion)
+    parsed_result = parse_llm_json(answer_content)
 
     # Post-processing: flag banned absolute-language phrases
     banned = check_banned_phrases(answer_content)

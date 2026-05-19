@@ -4,7 +4,9 @@ import socketserver
 import os
 import sys
 
-PORT = 2081
+from config import DASHBOARD_PORT
+
+PORT = DASHBOARD_PORT
 DIRECTORY = os.path.dirname(os.path.abspath(__file__))
 
 

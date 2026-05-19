@@ -25,6 +25,21 @@ import cv2
 import numpy as np
 from PIL import Image, ImageDraw
 
+from config import (
+    COURT,
+    RADIUS_KM,
+    RADAR_ECHO_THRESHOLD_DBZ,
+    PLAYABLE_RAIN_THRESHOLD_DBZ,
+    ALPHA_THRESHOLD,
+    HORIZONS,
+    EARTH_RADIUS_KM,
+    SOURCE_TZ,
+    API_URL_TEMPLATE,
+    API_HEADERS,
+    RA_API_URL_TEMPLATE,
+    RA_API_HEADERS,
+    DBZ_PALETTE,
+)
 from risk_engine import (
     frame_quality,
     compute_trends,
@@ -33,76 +48,6 @@ from risk_engine import (
     save_calibration_log,
     compute_playability,
 )
-
-
-# COURT = {
-#     "id": "qiaoguang_commercial_centre",
-#     "name": "侨光商业中心",
-#     "lon": 113.54,
-#     "lat": 22.20,
-# }
-
-COURT = {
-    "id": "Keji 4th Road Tennis Court",
-    "name": "科技四路网球场",
-    "lon": 113.55,
-    "lat": 22.39,
-}
-
-# COURT = {
-#     "id": "Haibo Garden Bld.4",
-#     "name": "海波花园四栋",
-#     "lon": 113.52,
-#     "lat": 22.25,
-# }
-
-RADIUS_KM = 7.0
-RADAR_ECHO_THRESHOLD_DBZ = 15
-PLAYABLE_RAIN_THRESHOLD_DBZ = 25
-ALPHA_THRESHOLD = 8
-HORIZONS = {"30min": 5, "60min": 10, "120min": 20}
-EARTH_RADIUS_KM = 6371.0088
-SOURCE_TZ = timezone(timedelta(hours=8))
-
-# GD121 API Constants (CAPPI radar + QPF)
-API_URL_TEMPLATE = "https://wxc.gd121.cn/gdecloud/servlet/servletcityweatherall4?DISTRICTCODE=440402&LNG={lon}&LAT={lat}&FROM=binfen"
-API_HEADERS = {
-    "Host": "wxc.gd121.cn",
-    "Accept": "application/json, text/plain, */*",
-    "Origin": "https://mp.gd121.cn",
-    "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 26_4_2 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148 MicroMessenger/8.0.73(0x18004923) NetType/4G Language/zh_CN miniProgram/wx4e37a66956191c3a",
-    "Referer": "https://mp.gd121.cn/",
-    "Accept-Language": "en-US,en;q=0.9",
-}
-
-# Grid weather API (ra.gd121.cn) - precise grid-interpolated real-time weather
-RA_API_URL_TEMPLATE = "https://ra.gd121.cn/grid/api/index/weatherInfo?longitude={lon}&latitude={lat}&FROM=binfen"
-RA_API_HEADERS = {
-    "Host": "ra.gd121.cn",
-    "Accept": "application/json, text/plain, */*",
-    "Origin": "https://mp.gd121.cn",
-    "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 26_4_2 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148 MicroMessenger/8.0.73(0x18004923) NetType/4G Language/zh_CN miniProgram/wx4e37a66956191c3a",
-    "Referer": "https://mp.gd121.cn/",
-    "Accept-Language": "en-US,en;q=0.9",
-}
-
-# Approximate CAPPI legend colors sampled from the displayed legend.
-DBZ_PALETTE = [
-    (5, (0, 221, 208)),
-    (10, (0, 169, 214)),
-    (15, (5, 51, 245)),
-    (20, (0, 238, 0)),
-    (25, (0, 214, 50)),
-    (30, (0, 141, 31)),
-    (35, (255, 242, 0)),
-    (40, (229, 201, 0)),
-    (45, (255, 140, 20)),
-    (50, (255, 41, 41)),
-    (55, (201, 20, 20)),
-    (60, (123, 0, 0)),
-    (65, (255, 77, 255)),
-    (70, (153, 73, 191)),
-]
 
 
 @dataclass(frozen=True)
