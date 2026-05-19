@@ -310,4 +310,4 @@ AMAP_INPUT_TIPS_URL = "https://restapi.amap.com/v3/assistant/inputtips"
 
 # 前端仪表盘静态文件 HTTP 服务的监听端口。
 # 部署时需确保此端口未被占用，且 Nginx 反向代理指向此端口。
-DASHBOARD_PORT = 2081
+DASHBOARD_PORT = 2082

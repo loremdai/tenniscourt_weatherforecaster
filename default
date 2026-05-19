@@ -57,6 +57,13 @@ server {
 		add_header Cache-Control "no-store, no-cache, must-revalidate, max-age=0";
 	}
 
+	# 代理 API 请求到后端 serve_dashboard.py (2082端口)
+	location /api/ {
+		proxy_pass http://127.0.0.1:2082;
+		proxy_set_header Host $host;
+		proxy_set_header X-Real-IP $remote_addr;
+	}
+
 	# pass PHP scripts to FastCGI server
 	#
 	#location ~ \.php$ {

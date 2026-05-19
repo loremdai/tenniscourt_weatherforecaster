@@ -1,0 +1,13 @@
+[Unit]
+Description=Tennis Court Weather API Dashboard
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/var/www/weather_forcaster
+ExecStart=/var/www/weather_forcaster/weather_forecaster/bin/python3 /var/www/weather_forcaster/serve_dashboard.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
