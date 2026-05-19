@@ -102,32 +102,55 @@ function updateForecastUI(data) {
         _updateInterval = Math.max(1, Math.round((_nextUpdateTarget.getTime() - d.getTime()) / 1000));
     }
 
-    // Booking decision
-    if (data.booking) {
-        const b = data.booking;
-        setText('booking-decision', b.decision_cn || b.decision);
-        const wEl = document.getElementById('booking-window');
-        if (wEl) { wEl.innerHTML = ''; wEl.append(lucideI('clock', 15, 'var(--color-text-muted)'), ` ${b.play_window} (${b.lead_time_hours}小时后)`); }
+    const isGenerating = data.llm_generating === true;
+    const heroCard = document.getElementById('hero-card');
+    if (heroCard) {
+        if (isGenerating) {
+            heroCard.classList.add('llm-generating');
+            setText('booking-decision', 'AI 正在分析...');
+            const wEl = document.getElementById('booking-window');
+            if (wEl) wEl.innerHTML = '<div class="skeleton skeleton-text" style="width:100px;height:16px;margin-bottom:-2px;"></div>';
+            document.getElementById('hero-recheck').style.display = 'none';
+            
+            const bar = document.getElementById('hero-bar');
+            const ico = document.getElementById('status-icon');
+            if (bar) bar.className = 'hero-bar warn';
+            if (ico) {
+                ico.className = 'status-icon gl-blue';
+                ico.innerHTML = '<i data-lucide="loader" style="width:26px;height:26px;color:var(--blue);animation:spin 1s linear infinite;"></i>';
+            }
+            
+            const ul = document.getElementById('booking-reasons');
+            if (ul) ul.innerHTML = '<li class="reason"><div class="skeleton" style="width:100%;height:14px;border-radius:4px;"></div></li><li class="reason"><div class="skeleton" style="width:80%;height:14px;border-radius:4px;"></div></li>';
+        } else {
+            heroCard.classList.remove('llm-generating');
+            if (data.booking) {
+                const b = data.booking;
+                setText('booking-decision', b.decision_cn || b.decision);
+                const wEl = document.getElementById('booking-window');
+                if (wEl) { wEl.innerHTML = ''; wEl.append(lucideI('clock', 15, 'var(--color-text-muted)'), ` ${b.play_window} (${b.lead_time_hours}小时后)`); }
 
-        if (b.check_again_at) {
-            const rc = document.getElementById('hero-recheck');
-            if (rc) { rc.style.display = 'inline-flex'; setText('recheck-time', `${b.check_again_at} 复查`); }
-        }
+                if (b.check_again_at) {
+                    const rc = document.getElementById('hero-recheck');
+                    if (rc) { rc.style.display = 'inline-flex'; setText('recheck-time', `${b.check_again_at} 复查`); }
+                }
 
-        const pos = b.decision === 'keep_booking';
-        const neu = b.decision === 'keep_but_recheck';
-        const bar = document.getElementById('hero-bar');
-        const ico = document.getElementById('status-icon');
-        if (pos) setHero(bar, ico, 'good', 'green', 'check-circle', 'var(--green)');
-        else if (neu) setHero(bar, ico, 'warn', 'amber', 'alert-triangle', 'var(--amber)');
-        else setHero(bar, ico, 'bad', 'red', 'x-circle', 'var(--red)');
+                const pos = b.decision === 'keep_booking';
+                const neu = b.decision === 'keep_but_recheck';
+                const bar = document.getElementById('hero-bar');
+                const ico = document.getElementById('status-icon');
+                if (pos) setHero(bar, ico, 'good', 'green', 'check-circle', 'var(--green)');
+                else if (neu) setHero(bar, ico, 'warn', 'amber', 'alert-triangle', 'var(--amber)');
+                else setHero(bar, ico, 'bad', 'red', 'x-circle', 'var(--red)');
 
-        const ul = document.getElementById('booking-reasons');
-        if (ul) {
-            ul.innerHTML = '';
-            (b.reason || []).forEach(r => ul.appendChild(mkReason(r, 'info', false)));
-            if (b.caveat && b.caveat[0] !== '无特别注意事项')
-                b.caveat.forEach(c => ul.appendChild(mkReason(c, 'alert-circle', true)));
+                const ul = document.getElementById('booking-reasons');
+                if (ul) {
+                    ul.innerHTML = '';
+                    (b.reason || []).forEach(r => ul.appendChild(mkReason(r, 'info', false)));
+                    if (b.caveat && b.caveat[0] !== '无特别注意事项')
+                        b.caveat.forEach(c => ul.appendChild(mkReason(c, 'alert-circle', true)));
+                }
+            }
         }
     }
 
@@ -335,6 +358,27 @@ function initRadarPlayer(frames) {
 
 // ─── Diagnosis: 3 separate cards ───
 function updateDiagnosisUI(data) {
+    const isGenerating = data.llm_generating === true;
+    if (isGenerating) {
+        setText('llm-headline', '');
+        document.getElementById('llm-headline').innerHTML = '<div class="skeleton" style="width:100%;height:20px;margin-bottom:8px;"></div><div class="skeleton" style="width:60%;height:20px;"></div>';
+        
+        const statusEl = document.getElementById('ai-playability');
+        if (statusEl) {
+            statusEl.className = 'ai-status-badge';
+            statusEl.innerHTML = '<div class="skeleton" style="width:28px;height:28px;border-radius:8px;margin-right:12px;"></div><div class="skeleton" style="width:60px;height:20px;"></div>';
+        }
+        
+        document.getElementById('ai-court-impact').innerHTML = '<div class="skeleton" style="width:100px;height:18px;"></div>';
+        document.getElementById('ai-suggestion').innerHTML = '<div class="skeleton" style="width:100%;height:16px;margin-bottom:6px;"></div><div class="skeleton" style="width:80%;height:16px;"></div>';
+        
+        const grid = document.getElementById('ra-grid');
+        if (grid) grid.innerHTML = '<div class="ra-risk-card" style="min-height:80px;"><div class="skeleton" style="width:40%;height:16px;margin-bottom:12px;"></div><div class="skeleton" style="width:100%;height:12px;margin-bottom:8px;"></div><div class="skeleton" style="width:80%;height:12px;"></div></div>'.repeat(3);
+        
+        if (typeof lucide !== 'undefined') lucide.createIcons();
+        return; // Return early, don't parse missing data
+    }
+
     // Card 4: AI Summary
     if (data.conclusion) {
         const c = data.conclusion;
@@ -906,6 +950,188 @@ function renderPlayabilityBreakdown(pb, horizon) {
     if (typeof lucide !== 'undefined') lucide.createIcons();
 }
 
+// ─── Location Search ───
+let _searchDebounce = null;
+
+function initLocationSearch() {
+    const trigger = document.getElementById('location-trigger');
+    const overlay = document.getElementById('location-overlay');
+    const input = document.getElementById('location-input');
+    const closeBtn = document.getElementById('location-close');
+    const results = document.getElementById('location-results');
+    if (!trigger || !overlay || !input || !results) return;
+
+    function openSearch() {
+        overlay.style.display = 'flex';
+        input.value = '';
+        results.innerHTML = '';
+        setTimeout(() => input.focus(), 100);
+        if (typeof lucide !== 'undefined') lucide.createIcons();
+    }
+
+    function closeSearch() {
+        overlay.style.display = 'none';
+        input.value = '';
+        results.innerHTML = '';
+    }
+
+    trigger.onclick = openSearch;
+    trigger.onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openSearch(); } };
+    closeBtn.onclick = closeSearch;
+
+    // Close on overlay click (not search box)
+    overlay.onclick = (e) => { if (e.target === overlay) closeSearch(); };
+
+    // Close on Escape
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && overlay.style.display !== 'none') closeSearch();
+    });
+
+    // Debounced search
+    input.oninput = () => {
+        clearTimeout(_searchDebounce);
+        const q = input.value.trim();
+        if (!q) { results.innerHTML = ''; return; }
+        if (q.length < 2) return;
+
+        results.innerHTML = '<div class="location-loading"><i data-lucide="loader" style="width:16px;height:16px;"></i>搜索中...</div>';
+        if (typeof lucide !== 'undefined') lucide.createIcons();
+
+        _searchDebounce = setTimeout(async () => {
+            try {
+                const res = await fetch(`/api/search?q=${encodeURIComponent(q)}`);
+                const data = await res.json();
+                renderSearchResults(data.tips || [], results, closeSearch);
+            } catch (err) {
+                results.innerHTML = '<div class="location-results-empty">搜索请求失败，请重试</div>';
+                console.error('Search error:', err);
+            }
+        }, 300);
+    };
+
+    // Restore from localStorage on load
+    const saved = localStorage.getItem('weather_location');
+    if (saved) {
+        try {
+            const loc = JSON.parse(saved);
+            setText('court-name', loc.name || '未知位置');
+            if (loc.lon && loc.lat) {
+                setText('court-coords', `${loc.lat}°N  ${loc.lon}°E`);
+            }
+        } catch (_) { /* ignore */ }
+    }
+}
+
+function renderSearchResults(tips, container, onClose) {
+    if (!tips.length) {
+        container.innerHTML = '<div class="location-results-empty">未找到匹配的地点</div>';
+        return;
+    }
+
+    container.innerHTML = '';
+    tips.forEach(tip => {
+        const item = document.createElement('div');
+        item.className = 'location-result-item';
+        item.innerHTML = `
+            <div class="location-result-icon"><i data-lucide="map-pin"></i></div>
+            <div class="location-result-text">
+                <div class="location-result-name">${escapeHtml(tip.name)}</div>
+                <div class="location-result-address">${escapeHtml(tip.district || '')}${tip.address ? ' · ' + escapeHtml(tip.address) : ''}</div>
+            </div>
+            <div class="location-result-coords">${tip.lat.toFixed(2)}°N ${tip.lon.toFixed(2)}°E</div>
+        `;
+        item.onclick = () => selectLocation(tip, onClose);
+        container.appendChild(item);
+    });
+    if (typeof lucide !== 'undefined') lucide.createIcons();
+}
+
+async function selectLocation(tip, onClose) {
+    const loc = { name: tip.name, lon: tip.lon, lat: tip.lat };
+
+    // Update UI immediately
+    setText('court-name', loc.name);
+    setText('court-coords', `${loc.lat}°N  ${loc.lon}°E`);
+
+    // Persist to localStorage
+    localStorage.setItem('weather_location', JSON.stringify(loc));
+
+    // Notify backend
+    try {
+        await fetch('/api/location', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(loc),
+        });
+    } catch (err) {
+        console.error('Failed to update backend location:', err);
+    }
+
+    onClose();
+
+    // Immediately refresh with current data
+    fetchDashboardData();
+
+    // Start rapid polling to catch backend's new forecast for this location.
+    // The backend detects the location change within ~2s and starts a new cycle,
+    // which typically takes 10-30s. We poll every 5s for up to 2 minutes.
+    _startLocationRefreshPoll(loc);
+}
+
+let _locationPollTimer = null;
+
+function _startLocationRefreshPoll(expectedLoc) {
+    // Clear any previous rapid poll
+    if (_locationPollTimer) clearInterval(_locationPollTimer);
+
+    const startTime = Date.now();
+    const maxDuration = 120_000; // 2 minutes
+    const pollInterval = 5_000; // 5 seconds
+
+    _locationPollTimer = setInterval(async () => {
+        if (Date.now() - startTime > maxDuration) {
+            // Timeout — stop polling, remove indicator
+            clearInterval(_locationPollTimer);
+            _locationPollTimer = null;
+            const heroCard = document.getElementById('hero-card');
+            if (heroCard) heroCard.classList.remove('location-refreshing');
+            return;
+        }
+
+        try {
+            const res = await fetch(`${FORECAST_URL}?t=${Date.now()}`);
+            if (!res.ok) return;
+            const data = await res.json();
+
+            // Check if this forecast was generated with the new location
+            const courtLon = data.court?.lon;
+            const courtLat = data.court?.lat;
+            if (courtLon && courtLat &&
+                Math.abs(courtLon - expectedLoc.lon) < 0.001 &&
+                Math.abs(courtLat - expectedLoc.lat) < 0.001) {
+                // New data arrived! Do a full refresh and stop polling
+                clearInterval(_locationPollTimer);
+                _locationPollTimer = null;
+                _forecastData = data;
+                updateForecastUI(data);
+                const heroCard = document.getElementById('hero-card');
+                if (heroCard) heroCard.classList.remove('location-refreshing');
+
+                // Also fetch diagnosis
+                const dRes = await fetch(`${DIAGNOSIS_URL}?t=${Date.now()}`);
+                if (dRes.ok) updateDiagnosisUI(await dRes.json());
+            }
+        } catch (_) { /* ignore polling errors */ }
+    }, pollInterval);
+}
+
+function escapeHtml(s) {
+    return String(s || '').replace(/[&<>"']/g, ch => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+    }[ch]));
+}
+
 // ─── Init ───
 fetchDashboardData();
 setInterval(fetchDashboardData, 30000);
+initLocationSearch();

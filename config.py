@@ -18,6 +18,7 @@
 
 from __future__ import annotations
 
+import os
 from datetime import timedelta, timezone
 
 import numpy as np
@@ -291,7 +292,20 @@ BANNED_PHRASES = [
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# 8. 仪表盘服务端口
+# 8. 高德地图 API 配置
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# 高德 Web 服务 API Key，用于地址搜索（Input Tips）功能。
+# 通过后端代理转发调用，不暴露给前端。
+AMAP_API_KEY = os.getenv("AMAP_MAPS_API_KEY", "")
+
+# 输入提示（自动补全）API 端点。
+# 文档：https://lbs.amap.com/api/webservice/guide/api/inputtips
+AMAP_INPUT_TIPS_URL = "https://restapi.amap.com/v3/assistant/inputtips"
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 9. 仪表盘服务端口
 # ═══════════════════════════════════════════════════════════════════════════════
 
 # 前端仪表盘静态文件 HTTP 服务的监听端口。

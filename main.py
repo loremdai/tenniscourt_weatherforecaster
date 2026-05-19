@@ -26,6 +26,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
 import time
@@ -207,12 +208,34 @@ def parse_args() -> argparse.Namespace:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 
+def _read_location_stamp() -> str | None:
+    """Read a fingerprint string from runtime_location.json for change detection.
+
+    Returns a compact JSON string of (lon, lat, name), or None if the file
+    does not exist or is unreadable.
+    """
+    loc_path = Path("output/runtime_location.json")
+    try:
+        if loc_path.is_file():
+            data = json.loads(loc_path.read_text(encoding="utf-8"))
+            if data.get("lon") and data.get("lat"):
+                return json.dumps(
+                    {"lon": data["lon"], "lat": data["lat"], "name": data.get("name")},
+                    sort_keys=True,
+                )
+    except (json.JSONDecodeError, OSError):
+        pass
+    return None
+
+
 def main() -> int:
     """程序主函数，负责调度预报管线。
 
     运行模式：
         - 守护进程模式（默认）：无限循环执行预报周期，
           每次间隔 --interval 秒。单次执行失败不会中断循环。
+          在等待间隔期间，每 2 秒检查一次前端是否切换了分析位置，
+          一旦检测到位置变更，立即中断等待并启动新一轮预报周期。
         - 单次模式（--once）：执行一次完整的预报周期后退出。
 
     每个周期结束后都会调用 flush_langfuse() 刷新可观测性追踪数据。
@@ -231,6 +254,9 @@ def main() -> int:
         target_label = args.target_time if args.target_time != "now" else "实时"
         print(f"Starting daemon. Target: {target_label}, Interval: {args.interval}s")
         while True:
+            # 记录本轮执行前的位置快照
+            loc_before = _read_location_stamp()
+
             try:
                 run_once(args)
             except Exception as e:
@@ -239,8 +265,28 @@ def main() -> int:
                 print(f"[{ts}] Error: {e}", file=sys.stderr)
             # 每轮结束后刷新 Langfuse 追踪数据，确保及时上传
             flush_langfuse()
+
+            # 更新执行后的位置快照（run_once 可能已更新 COURT）
+            loc_after = _read_location_stamp()
+
+            # ---- 可中断的等待循环 ----
+            # 每 2 秒检查 runtime_location.json 是否变更，
+            # 一旦前端切换了位置，立即跳出等待启动新周期。
             print(f"Waiting {args.interval} seconds...")
-            time.sleep(args.interval)
+            poll_interval = 2  # seconds
+            elapsed = 0
+            while elapsed < args.interval:
+                time.sleep(poll_interval)
+                elapsed += poll_interval
+                loc_now = _read_location_stamp()
+                if loc_now is not None and loc_now != loc_after:
+                    ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    print(
+                        f"[{ts}] Location changed, "
+                        f"starting new forecast cycle immediately.",
+                        flush=True,
+                    )
+                    break
     return 0
 
 

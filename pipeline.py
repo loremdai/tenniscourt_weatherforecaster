@@ -159,6 +159,27 @@ def run_once(args: argparse.Namespace) -> None:
     now = datetime.now()
     ts = now.strftime("%Y-%m-%d %H:%M:%S")
 
+    # ---- Step 0: Dynamic location loading ----
+    # 优先读取前端提交的运行时位置，不存在时降级使用 config.py 默认值。
+    # 直接更新 config.COURT 字典，使所有下游模块（nowcast 等）自动生效。
+    runtime_loc = Path("output/runtime_location.json")
+    if runtime_loc.is_file():
+        try:
+            loc = json.loads(runtime_loc.read_text(encoding="utf-8"))
+            if loc.get("lon") and loc.get("lat"):
+                COURT["id"] = loc.get("id", "user_selected")
+                COURT["name"] = loc.get("name", "用户选择位置")
+                COURT["lon"] = float(loc["lon"])
+                COURT["lat"] = float(loc["lat"])
+                print(
+                    f"[{ts}] Using runtime location: "
+                    f"{COURT['name']} ({COURT['lon']}, {COURT['lat']})",
+                    flush=True,
+                )
+        except (json.JSONDecodeError, OSError, ValueError) as e:
+            print(f"[{ts}] Warning: failed to load runtime location: {e}",
+                  file=sys.stderr)
+
     # ---- Step 1: Fetch data ----
     grid_data = None
     print(
@@ -187,6 +208,21 @@ def run_once(args: argparse.Namespace) -> None:
     )
     print(f"[{ts}] Building radar report...", flush=True)
     report = build_report(row, bounds, frames, args.debug_image, grid_data)
+
+    # ---- Fast Feedback: Write intermediate report ----
+    # Save the preliminary report before time-consuming LLM steps
+    report["llm_generating"] = True
+    output = Path(args.output)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(
+        json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    )
+    # Write intermediate diagnosis to show skeletons on frontend
+    diag_output = Path(args.diagnosis_output)
+    diag_output.parent.mkdir(parents=True, exist_ok=True)
+    diag_output.write_text(
+        json.dumps({"llm_generating": True}, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    )
 
     # ---- Step 3: Radar visual QA ----
     risk_scores = report.get("risk_scores", {})
@@ -301,6 +337,7 @@ def run_once(args: argparse.Namespace) -> None:
 
     output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)
+    report.pop("llm_generating", None)
     output.write_text(
         json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
     )

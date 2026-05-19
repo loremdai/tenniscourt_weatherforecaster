@@ -17,12 +17,32 @@
                 <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z"/><path d="M22 10a3 3 0 0 0-3-3h-2.207a5.502 5.502 0 0 0-10.702.5"/></svg>
                 网球天气决策仪表板
             </h1>
-            <div class="location-badge">
+            <div class="location-badge" id="location-trigger" role="button" tabindex="0" aria-label="切换分析位置" title="点击切换分析位置">
                 <span class="location-pin"><i data-lucide="map-pin"></i></span>
                 <span class="location-name" id="court-name">加载中...</span>
                 <span class="location-coords" id="court-coords"></span>
+                <span class="location-edit-hint"><i data-lucide="pencil" style="width:11px;height:11px;opacity:0.5;"></i></span>
             </div>
         </div>
+
+    <!-- Location Search Overlay -->
+    <div class="location-search-overlay" id="location-overlay" style="display:none;">
+        <div class="location-search-box">
+            <div class="location-search-header">
+                <i data-lucide="search" style="width:16px;height:16px;color:var(--color-text-muted);"></i>
+                <input type="text" class="location-search-input" id="location-input"
+                       placeholder="搜索地址、场地名称..." autocomplete="off" />
+                <button class="location-search-close" id="location-close" aria-label="关闭">
+                    <i data-lucide="x" style="width:16px;height:16px;"></i>
+                </button>
+            </div>
+            <div class="location-results" id="location-results"></div>
+            <div class="location-search-footer">
+                <i data-lucide="info" style="width:11px;height:11px;opacity:0.4;"></i>
+                <span>搜索范围限广东省 · 选择后自动切换分析位置</span>
+            </div>
+        </div>
+    </div>
         <div class="header-right">
             <span class="ntp-clock"><i data-lucide="clock" style="width:13px;height:13px;"></i><span class="ntp-h" id="ntp-h">--</span><span class="ntp-colon">:</span><span class="ntp-m" id="ntp-m">--</span><span class="ntp-colon">:</span><span class="ntp-s" id="ntp-s">--</span></span>
             <span id="update-time" class="update-time">最后更新: --:--</span>
