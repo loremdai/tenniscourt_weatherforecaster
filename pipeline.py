@@ -18,7 +18,6 @@ from config import COURT
 from nowcast import (
     fetch_weather_data,
     fetch_grid_weather,
-    load_response,
     first_row,
     parse_bounds,
     collect_cappi,
@@ -162,24 +161,20 @@ def run_once(args: argparse.Namespace) -> None:
 
     # ---- Step 1: Fetch data ----
     grid_data = None
-    if args.daemon:
-        print(
-            f"[{ts}] Fetching live data for lon={COURT['lon']}, lat={COURT['lat']}...",
-            flush=True,
-        )
-        print(f"[{ts}] Fetching official nowcast API...", flush=True)
-        payload = fetch_weather_data(
-            COURT["lon"], COURT["lat"], timeout=args.network_timeout
-        )
-        print(f"[{ts}] Official nowcast API returned.", flush=True)
-        print(f"[{ts}] Fetching grid weather API...", flush=True)
-        grid_data = fetch_grid_weather(
-            COURT["lon"], COURT["lat"], timeout=args.network_timeout
-        )
-        print(f"[{ts}] Grid weather API returned.", flush=True)
-    else:
-        print(f"[{ts}] Loading local response from {args.response}...", flush=True)
-        payload = load_response(Path(args.response))
+    print(
+        f"[{ts}] Fetching live data for lon={COURT['lon']}, lat={COURT['lat']}...",
+        flush=True,
+    )
+    print(f"[{ts}] Fetching official nowcast API...", flush=True)
+    payload = fetch_weather_data(
+        COURT["lon"], COURT["lat"], timeout=args.network_timeout
+    )
+    print(f"[{ts}] Official nowcast API returned.", flush=True)
+    print(f"[{ts}] Fetching grid weather API...", flush=True)
+    grid_data = fetch_grid_weather(
+        COURT["lon"], COURT["lat"], timeout=args.network_timeout
+    )
+    print(f"[{ts}] Grid weather API returned.", flush=True)
 
     # ---- Step 2: Radar analysis + risk scores ----
     print(f"[{ts}] Parsing radar metadata...", flush=True)
@@ -314,7 +309,7 @@ def run_once(args: argparse.Namespace) -> None:
     _print_booking_summary(booking)
 
     # Stamp next_update_at after ALL processing (incl. LLM)
-    if args.daemon:
+    if not args.once:
         next_at = datetime.now().astimezone() + timedelta(seconds=args.interval)
         report["next_update_at"] = next_at.isoformat(timespec="seconds")
         output.write_text(

@@ -4,17 +4,20 @@
 本模块负责：
     1. 加载 .env 环境变量
     2. 解析命令行参数（CLI）
-    3. 根据运行模式（单次 / 守护进程）调度预报管线
+    3. 调度预报管线（默认守护进程模式，循环刷新）
 
 用法示例：
-    # 即时短临预报（默认 target-time 为 "now"）
+    # 默认守护进程模式：每 6 分钟自动刷新（实时短临）
     python3 main.py
 
     # 今晚 8 点开场、预计打 2 小时的预约决策
     python3 main.py --target-time 20:00 --play-duration 120
 
-    # 守护进程模式：每 6 分钟自动刷新一次
-    python3 main.py --daemon --interval 360 --target-time 20:00
+    # 自定义刷新间隔为 5 分钟
+    python3 main.py --interval 300
+
+    # 单次执行模式（执行一次后退出）
+    python3 main.py --once
 
     # 跳过大模型诊断（更快，仅使用规则引擎）
     python3 main.py --target-time 20:00 --no-llm
@@ -89,11 +92,10 @@ from pipeline import run_once  # noqa: E402
 def parse_args() -> argparse.Namespace:
     """解析命令行参数并返回 Namespace 对象。
 
-    参数分为以下五组：
-        - 数据源：控制离线 / 在线模式和刷新频率
+    参数分为以下四组：
+        - 运行模式：守护进程（默认）或单次执行
         - 预约设置：目标开场时间和打球时长
         - 输出路径：预报报告、诊断结果、调试图片等
-        - 网络设置：数据接口的超时时间
         - LLM 设置：大模型相关开关、API key、超时和雷达视觉审查模式
 
     Returns:
@@ -105,16 +107,11 @@ def parse_args() -> argparse.Namespace:
         epilog=__doc__,
     )
 
-    # ---- 数据源参数 ----
+    # ---- 运行模式参数 ----
     parser.add_argument(
-        "--response",
-        default="response.txt",
-        help="本地 JSON 响应文件路径（离线模式使用）。",
-    )
-    parser.add_argument(
-        "--daemon",
+        "--once",
         action="store_true",
-        help="启用守护进程模式，从 API 获取实时数据（在线模式）。",
+        help="单次执行模式：只运行一轮预报周期后退出（默认为守护进程循环模式）。",
     )
     parser.add_argument(
         "--interval",
@@ -211,12 +208,12 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> int:
-    """程序主函数，负责根据运行模式调度预报管线。
+    """程序主函数，负责调度预报管线。
 
     运行模式：
-        - 单次模式（默认）：执行一次完整的预报周期后退出。
-        - 守护进程模式（--daemon）：无限循环执行预报周期，
+        - 守护进程模式（默认）：无限循环执行预报周期，
           每次间隔 --interval 秒。单次执行失败不会中断循环。
+        - 单次模式（--once）：执行一次完整的预报周期后退出。
 
     每个周期结束后都会调用 flush_langfuse() 刷新可观测性追踪数据。
 
@@ -225,8 +222,12 @@ def main() -> int:
     """
     args = parse_args()
 
-    if args.daemon:
-        # ---- 守护进程模式：循环执行预报周期 ----
+    if args.once:
+        # ---- 单次模式：执行一次后退出 ----
+        run_once(args)
+        flush_langfuse()
+    else:
+        # ---- 守护进程模式（默认）：循环执行预报周期 ----
         target_label = args.target_time if args.target_time != "now" else "实时"
         print(f"Starting daemon. Target: {target_label}, Interval: {args.interval}s")
         while True:
@@ -240,10 +241,6 @@ def main() -> int:
             flush_langfuse()
             print(f"Waiting {args.interval} seconds...")
             time.sleep(args.interval)
-    else:
-        # ---- 单次模式：执行一次后退出 ----
-        run_once(args)
-        flush_langfuse()
     return 0
 
 
