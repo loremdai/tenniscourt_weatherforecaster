@@ -189,7 +189,10 @@ RA_API_HEADERS = {
 LLM_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 
 # 文本推理/诊断模型：负责综合分析气象数据并输出预约决策建议。
-LLM_DIAGNOSIS_MODEL = "deepseek-v4-pro"
+LLM_DIAGNOSIS_MODEL = "deepseek-v4-flash"
+
+# 是否启用大模型思考模式（部分模型如 deepseek-v3 支持，启用会返回思考过程，但会增加耗时）
+LLM_ENABLE_THINKING = False
 
 # 多模态视觉模型：负责对 CAPPI 雷达拼图进行图像质检和回波审查。
 RADAR_VISION_MODEL = "qwen3.6-plus"
@@ -310,4 +313,4 @@ AMAP_INPUT_TIPS_URL = "https://restapi.amap.com/v3/assistant/inputtips"
 
 # 前端仪表盘静态文件 HTTP 服务的监听端口。
 # 部署时需确保此端口未被占用，且 Nginx 反向代理指向此端口。
-DASHBOARD_PORT = 2082
+DASHBOARD_PORT = int(os.getenv("DASHBOARD_PORT", 2082))

@@ -172,6 +172,49 @@ body::before {
   50% { opacity:0.5; box-shadow: 0 0 0 5px rgba(34,197,94,0); }
 }
 
+/* Responsive adjustments for header */
+@media (max-width: 768px) {
+  .header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 12px;
+    padding-bottom: 12px;
+    margin-bottom: 16px;
+  }
+  .header-title {
+    width: 100%;
+  }
+  .header-right {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 8px;
+    width: 100%;
+  }
+  .header-right > span {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 100%;
+    height: 34px;
+    font-size: var(--fs-xs) !important;
+    padding: 0 10px !important;
+    box-sizing: border-box;
+    border-radius: 8px;
+    margin: 0;
+  }
+}
+
+@media (max-width: 360px) {
+  .header-right {
+    gap: 6px;
+  }
+  .header-right > span {
+    font-size: var(--fs-2xs) !important;
+    padding: 0 6px !important;
+    gap: 4px;
+  }
+}
+
 /* ══════════════════════════════════════════════
    BENTO GRID — 8 cards, asymmetric layout
    ══════════════════════════════════════════════ */
@@ -1458,6 +1501,63 @@ button:focus-visible, .radar-dot:focus-visible {
 
 .llm-generating .skeleton-text {
   display: inline-block;
+}
+
+/* Data Source Detail Modal */
+.ds-modal-box {
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+}
+.ds-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--border);
+}
+.ds-modal-title-wrap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.ds-modal-title {
+  font-family: 'Fira Sans', sans-serif;
+  font-size: var(--fs-md);
+  font-weight: 600;
+  color: var(--color-text);
+}
+.ds-modal-content {
+  padding: 20px;
+  overflow-y: auto;
+  flex: 1;
+}
+.ds-modal-text {
+  font-size: var(--fs-base);
+  color: var(--color-text-secondary);
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-all;
+  margin: 0;
+}
+
+/* Expandable hover effect */
+.ds-item.expandable {
+  cursor: pointer;
+  position: relative;
+}
+.ds-item.expandable:hover {
+  border-color: rgba(59, 130, 246, 0.35);
+  background: rgba(255, 255, 255, 0.03);
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.2);
+}
+.ds-item.expandable:hover .ds-expand-ico {
+  opacity: 1 !important;
+  color: var(--blue) !important;
+  transform: scale(1.1);
+}
+.ds-expand-ico {
+  transition: opacity 0.2s ease, color 0.2s ease, transform 0.2s ease;
 }
 
 

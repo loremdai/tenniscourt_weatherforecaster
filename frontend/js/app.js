@@ -5,6 +5,7 @@
 const FORECAST_URL = '../output/forecast.json';
 const DIAGNOSIS_URL = '../output/diagnosis.json';
 let _forecastData = null; // stored globally for cross-card metric access
+let _hasValidDiagnosis = false;
 
 // ─── NTP Clock (synced via timeapi.io) ───
 let _ntpOffset = 0; // ms offset: server_time - local_time
@@ -75,7 +76,14 @@ async function fetchDashboardData() {
             fetch(`${FORECAST_URL}?t=${t}`),
             fetch(`${DIAGNOSIS_URL}?t=${t}`)
         ]);
-        if (fRes.ok) { _forecastData = await fRes.json(); updateForecastUI(_forecastData); }
+        if (fRes.ok) {
+            const data = await fRes.json();
+            if (data.llm_generating && _forecastData && _forecastData.booking) {
+                data.booking = _forecastData.booking;
+            }
+            _forecastData = data;
+            updateForecastUI(_forecastData);
+        }
         if (dRes.ok) updateDiagnosisUI(await dRes.json());
     } catch (e) {
         console.error('Fetch error:', e);
@@ -106,24 +114,29 @@ function updateForecastUI(data) {
     const heroCard = document.getElementById('hero-card');
     if (heroCard) {
         if (isGenerating) {
-            heroCard.classList.add('llm-generating');
-            setText('booking-decision', 'AI 正在分析...');
-            const wEl = document.getElementById('booking-window');
-            if (wEl) wEl.innerHTML = '<div class="skeleton skeleton-text" style="width:100px;height:16px;margin-bottom:-2px;"></div>';
-            document.getElementById('hero-recheck').style.display = 'none';
-            
-            const bar = document.getElementById('hero-bar');
-            const ico = document.getElementById('status-icon');
-            if (bar) bar.className = 'hero-bar warn';
-            if (ico) {
-                ico.className = 'status-icon gl-blue';
-                ico.innerHTML = '<i data-lucide="loader" style="width:26px;height:26px;color:var(--blue);animation:spin 1s linear infinite;"></i>';
+            if (!data.booking) {
+                heroCard.classList.add('llm-generating');
+                setText('booking-decision', 'AI 正在分析...');
+                const wEl = document.getElementById('booking-window');
+                if (wEl) wEl.innerHTML = '<div class="skeleton skeleton-text" style="width:100px;height:16px;margin-bottom:-2px;"></div>';
+                document.getElementById('hero-recheck').style.display = 'none';
+                
+                const bar = document.getElementById('hero-bar');
+                const ico = document.getElementById('status-icon');
+                if (bar) bar.className = 'hero-bar warn';
+                if (ico) {
+                    ico.className = 'status-icon gl-blue';
+                    ico.innerHTML = '<i data-lucide="loader" style="width:26px;height:26px;color:var(--blue);animation:spin 1s linear infinite;"></i>';
+                }
+                
+                const ul = document.getElementById('booking-reasons');
+                if (ul) ul.innerHTML = '<li class="reason"><div class="skeleton" style="width:100%;height:14px;border-radius:4px;"></div></li><li class="reason"><div class="skeleton" style="width:80%;height:14px;border-radius:4px;"></div></li>';
+            } else {
+                heroCard.classList.add('llm-generating-subtle');
             }
-            
-            const ul = document.getElementById('booking-reasons');
-            if (ul) ul.innerHTML = '<li class="reason"><div class="skeleton" style="width:100%;height:14px;border-radius:4px;"></div></li><li class="reason"><div class="skeleton" style="width:80%;height:14px;border-radius:4px;"></div></li>';
         } else {
             heroCard.classList.remove('llm-generating');
+            heroCard.classList.remove('llm-generating-subtle');
             if (data.booking) {
                 const b = data.booking;
                 setText('booking-decision', b.decision_cn || b.decision);
@@ -274,6 +287,10 @@ function updateForecastUI(data) {
         }
     }
 
+    if (data && !data.llm_generating && data.booking) {
+        localStorage.setItem('cached_forecast', JSON.stringify(data));
+    }
+
     if (typeof lucide !== 'undefined') lucide.createIcons();
 }
 
@@ -360,22 +377,24 @@ function initRadarPlayer(frames) {
 function updateDiagnosisUI(data) {
     const isGenerating = data.llm_generating === true;
     if (isGenerating) {
-        setText('llm-headline', '');
-        document.getElementById('llm-headline').innerHTML = '<div class="skeleton" style="width:100%;height:20px;margin-bottom:8px;"></div><div class="skeleton" style="width:60%;height:20px;"></div>';
-        
-        const statusEl = document.getElementById('ai-playability');
-        if (statusEl) {
-            statusEl.className = 'ai-status-badge';
-            statusEl.innerHTML = '<div class="skeleton" style="width:28px;height:28px;border-radius:8px;margin-right:12px;"></div><div class="skeleton" style="width:60px;height:20px;"></div>';
+        if (!_hasValidDiagnosis) {
+            setText('llm-headline', '');
+            document.getElementById('llm-headline').innerHTML = '<div class="skeleton" style="width:100%;height:20px;margin-bottom:8px;"></div><div class="skeleton" style="width:60%;height:20px;"></div>';
+            
+            const statusEl = document.getElementById('ai-playability');
+            if (statusEl) {
+                statusEl.className = 'ai-status-badge';
+                statusEl.innerHTML = '<div class="skeleton" style="width:28px;height:28px;border-radius:8px;margin-right:12px;"></div><div class="skeleton" style="width:60px;height:20px;"></div>';
+            }
+            
+            document.getElementById('ai-court-impact').innerHTML = '<div class="skeleton" style="width:100px;height:18px;"></div>';
+            document.getElementById('ai-suggestion').innerHTML = '<div class="skeleton" style="width:100%;height:16px;margin-bottom:6px;"></div><div class="skeleton" style="width:80%;height:16px;"></div>';
+            
+            const grid = document.getElementById('ra-grid');
+            if (grid) grid.innerHTML = '<div class="ra-risk-card" style="min-height:80px;"><div class="skeleton" style="width:40%;height:16px;margin-bottom:12px;"></div><div class="skeleton" style="width:100%;height:12px;margin-bottom:8px;"></div><div class="skeleton" style="width:80%;height:12px;"></div></div>'.repeat(3);
+            
+            if (typeof lucide !== 'undefined') lucide.createIcons();
         }
-        
-        document.getElementById('ai-court-impact').innerHTML = '<div class="skeleton" style="width:100px;height:18px;"></div>';
-        document.getElementById('ai-suggestion').innerHTML = '<div class="skeleton" style="width:100%;height:16px;margin-bottom:6px;"></div><div class="skeleton" style="width:80%;height:16px;"></div>';
-        
-        const grid = document.getElementById('ra-grid');
-        if (grid) grid.innerHTML = '<div class="ra-risk-card" style="min-height:80px;"><div class="skeleton" style="width:40%;height:16px;margin-bottom:12px;"></div><div class="skeleton" style="width:100%;height:12px;margin-bottom:8px;"></div><div class="skeleton" style="width:80%;height:12px;"></div></div>'.repeat(3);
-        
-        if (typeof lucide !== 'undefined') lucide.createIcons();
         return; // Return early, don't parse missing data
     }
 
@@ -616,6 +635,9 @@ function updateDiagnosisUI(data) {
                     : '';
                 const el = document.createElement('div');
                 el.className = 'ds-item';
+                el.dataset.label = p.label;
+                el.dataset.icon = p.icon;
+                el.dataset.val = p.val;
                 el.innerHTML = `
                     <div class="ds-label"><i data-lucide="${p.icon}"></i>${p.label}</div>
                     <div class="ds-text">${p.val}</div>
@@ -623,7 +645,43 @@ function updateDiagnosisUI(data) {
                 grid.appendChild(el);
             });
             if (hasContent) section.style.display = 'block';
+
+            // Check truncation for data source items and set up modal logic
+            setTimeout(() => {
+                const items = grid.querySelectorAll('.ds-item');
+                items.forEach((item) => {
+                    const textEl = item.querySelector('.ds-text');
+                    if (textEl && textEl.scrollHeight > textEl.clientHeight) {
+                        item.classList.add('expandable');
+                        
+                        // Add hover expand icon
+                        const labelEl = item.querySelector('.ds-label');
+                        if (labelEl) {
+                            const expandIco = document.createElement('i');
+                            expandIco.setAttribute('data-lucide', 'maximize-2');
+                            expandIco.className = 'ds-expand-ico';
+                            expandIco.style.cssText = 'margin-left: auto; width: 12px; height: 12px; opacity: 0.4; transition: opacity 0.2s, transform 0.2s;';
+                            labelEl.appendChild(expandIco);
+                            if (typeof lucide !== 'undefined') lucide.createIcons();
+                        }
+                        
+                        // Open modal on click
+                        item.onclick = () => {
+                            const label = item.dataset.label;
+                            const icon = item.dataset.icon;
+                            const val = item.dataset.val;
+                            const chipsHtml = item.querySelector('.ds-chips')?.innerHTML || '';
+                            openDSModal(label, icon, val, chipsHtml);
+                        };
+                    }
+                });
+            }, 80);
         }
+    }
+
+    _hasValidDiagnosis = true;
+    if (data && !data.llm_generating && data.conclusion) {
+        localStorage.setItem('cached_diagnosis', JSON.stringify(data));
     }
 
     if (typeof lucide !== 'undefined') lucide.createIcons();
@@ -769,10 +827,25 @@ function renderQPFChart(qpf) {
     if (!svg || !qpf.length) return;
 
     const W = 400, H = 80;
-    const maxR = 10; // 10mm = heavy rain cap
-    const vals = qpf.map(p => Math.min(parseFloat(p.r) || 0, maxR));
-    const peak = Math.max(...vals);
-    const n = vals.length;
+    const valsRaw = qpf.map(p => parseFloat(p.r) || 0);
+    const peak = Math.max(...valsRaw);
+    
+    // Dynamic Y-axis scale based on peak rainfall to make trend visible
+    let maxR = 1.5;
+    if (peak > 0) {
+        if (peak <= 1.0) {
+            maxR = 1.2;
+        } else if (peak <= 2.5) {
+            maxR = 3.0;
+        } else if (peak <= 5.0) {
+            maxR = 6.0;
+        } else {
+            maxR = Math.max(10.0, Math.ceil(peak * 1.1));
+        }
+    }
+    
+    const vals = valsRaw.map(v => Math.min(v, maxR));
+    const count = vals.length;
     const wrap = svg.closest('.hero-rain-chart');
     if (wrap) {
         const qpfClass = peak <= 0 ? 'qpf-flat' : peak < 1 ? 'qpf-light' : 'qpf-active';
@@ -780,43 +853,80 @@ function renderQPFChart(qpf) {
     }
     svg.setAttribute('aria-label', peak <= 0 ? '未来两小时无降水趋势' : '未来两小时降水趋势');
 
-    // Build path
-    const dx = W / (n - 1 || 1);
+    // Build smooth bezier curve path
+    const dx = W / (count - 1 || 1);
+    const points = vals.map((v, i) => ({
+        x: i * dx,
+        y: H - (v / maxR) * (H - 4)
+    }));
+
     let pathD = `M0,${H}`;
-    vals.forEach((v, i) => {
-        const x = i * dx;
-        const y = H - (v / maxR) * (H - 4);
-        pathD += ` L${x},${y}`;
-    });
-    pathD += ` L${W},${H} Z`;
+    if (points.length > 0) {
+        pathD += ` L${points[0].x},${points[0].y}`;
+        const tension = 0.15;
+        for (let i = 0; i < points.length - 1; i++) {
+            const p0 = points[Math.max(i - 1, 0)];
+            const p1 = points[i];
+            const p2 = points[i + 1];
+            const p3 = points[Math.min(i + 2, points.length - 1)];
 
-    const gridLines = peak > 0 ? `
-        <line x1="0" y1="${H - (2.5/maxR)*(H-4)}" x2="${W}" y2="${H - (2.5/maxR)*(H-4)}" stroke="rgba(100,116,139,0.1)" stroke-dasharray="2 3"/>
-        <line x1="0" y1="${H - (5/maxR)*(H-4)}" x2="${W}" y2="${H - (5/maxR)*(H-4)}" stroke="rgba(100,116,139,0.08)" stroke-dasharray="2 3"/>
-        <line x1="0" y1="${H - (7.5/maxR)*(H-4)}" x2="${W}" y2="${H - (7.5/maxR)*(H-4)}" stroke="rgba(100,116,139,0.1)" stroke-dasharray="2 3"/>`
-        : '';
+            const cp1x = p1.x + (p2.x - p0.x) * tension;
+            const cp1y = Math.max(4, Math.min(H, p1.y + (p2.y - p0.y) * tension));
+            const cp2x = p2.x - (p3.x - p1.x) * tension;
+            const cp2y = Math.max(4, Math.min(H, p2.y - (p3.y - p1.y) * tension));
 
-    // Gradient fill — clean chart, no text
+            pathD += ` C ${cp1x},${cp1y} ${cp2x},${cp2y} ${p2.x},${p2.y}`;
+        }
+        pathD += ` L${W},${H} Z`;
+    } else {
+        pathD += ` L${W},${H} Z`;
+    }
+
+    // Dynamic grid lines with labels for clear reference
+    let gridLines = '';
+    if (peak > 0) {
+        let steps = [];
+        if (maxR <= 2.0) {
+            steps = [0.5, 1.0];
+        } else if (maxR <= 5.0) {
+            steps = [1.0, 2.0];
+        } else if (maxR <= 8.0) {
+            steps = [2.0, 4.0, 6.0];
+        } else {
+            steps = [2.5, 5.0, 7.5];
+        }
+        gridLines = steps.map(step => {
+            const y = H - (step / maxR) * (H - 4);
+            if (y < 4 || y > H) return '';
+            return `
+                <line x1="0" y1="${y}" x2="${W}" y2="${y}" stroke="rgba(255, 255, 255, 0.05)" stroke-width="1" stroke-dasharray="3 3"/>
+                <text x="6" y="${y - 4}" fill="rgba(255, 255, 255, 0.22)" font-size="8" font-family="'Fira Code', monospace" font-weight="500">${step}mm</text>
+            `;
+        }).join('');
+    }
+
+    // Gradient fill using the original green -> yellow -> red scheme, but with significantly increased opacity
     svg.innerHTML = `
         <defs>
             <linearGradient id="rain-grad" x1="0" y1="1" x2="0" y2="0">
-                <stop offset="0%" stop-color="rgba(34,197,94,0.1)"/>
-                <stop offset="30%" stop-color="rgba(34,197,94,0.25)"/>
-                <stop offset="60%" stop-color="rgba(245,158,11,0.35)"/>
-                <stop offset="100%" stop-color="rgba(239,68,68,0.45)"/>
+                <stop offset="0%" stop-color="rgba(34, 197, 94, 0.22)"/>
+                <stop offset="30%" stop-color="rgba(34, 197, 94, 0.45)"/>
+                <stop offset="60%" stop-color="rgba(245, 158, 11, 0.58)"/>
+                <stop offset="100%" stop-color="rgba(239, 68, 68, 0.72)"/>
             </linearGradient>
         </defs>
         ${gridLines}
         ${peak > 0 ? `<path d="${pathD}" fill="url(#rain-grad)" stroke="none"/>` : ''}
-        <polyline points="${vals.map((v,i) => `${i*dx},${H-(v/maxR)*(H-4)}`).join(' ')}"
-            fill="none" stroke="rgba(59,130,246,0.5)" stroke-width="1.2" stroke-linejoin="round"/>
+        
+        <!-- Only draw a flat baseline if peak is 0 (no stroke outline when raining) -->
+        ${peak <= 0 ? `<line x1="0" y1="${H}" x2="${W}" y2="${H}" stroke="rgba(148, 163, 184, 0.12)" stroke-width="1"/>` : ''}
     `;
 
     // Time labels
     if (timesEl) {
-        const step = Math.max(1, Math.floor(n / 6));
+        const step = Math.max(1, Math.floor(count / 6));
         timesEl.innerHTML = '';
-        for (let i = 0; i < n; i += step) {
+        for (let i = 0; i < count; i += step) {
             const t = qpf[i].dt.split(' ')[1]?.slice(0, 5) || '';
             timesEl.innerHTML += `<span>${t}</span>`;
         }
@@ -1056,6 +1166,16 @@ async function selectLocation(tip, onClose) {
     // Persist to localStorage
     localStorage.setItem('weather_location', JSON.stringify(loc));
 
+    // Clear cache since we switched location
+    localStorage.removeItem('cached_forecast');
+    localStorage.removeItem('cached_diagnosis');
+    _forecastData = null;
+    _hasValidDiagnosis = false;
+
+    // Force loading UI state immediately for visual feedback
+    updateForecastUI({ llm_generating: true });
+    updateDiagnosisUI({ llm_generating: true });
+
     // Notify backend
     try {
         await fetch('/api/location', {
@@ -1131,7 +1251,81 @@ function escapeHtml(s) {
     }[ch]));
 }
 
+// ─── Load Cached Data ───
+(function loadCache() {
+    const cachedForecastStr = localStorage.getItem('cached_forecast');
+    const cachedDiagnosisStr = localStorage.getItem('cached_diagnosis');
+    if (cachedForecastStr && cachedDiagnosisStr) {
+        try {
+            const cachedForecast = JSON.parse(cachedForecastStr);
+            const cachedDiagnosis = JSON.parse(cachedDiagnosisStr);
+            
+            const savedLoc = localStorage.getItem('weather_location');
+            let locationMatch = true;
+            if (savedLoc) {
+                const loc = JSON.parse(savedLoc);
+                if (cachedForecast.court) {
+                    const latDiff = Math.abs((cachedForecast.court.lat || 0) - (loc.lat || 0));
+                    const lonDiff = Math.abs((cachedForecast.court.lon || 0) - (loc.lon || 0));
+                    if (latDiff > 0.001 || lonDiff > 0.001) {
+                        locationMatch = false;
+                    }
+                }
+            }
+            
+            if (locationMatch) {
+                _forecastData = cachedForecast;
+                _hasValidDiagnosis = true;
+                updateForecastUI(cachedForecast);
+                updateDiagnosisUI(cachedDiagnosis);
+            }
+        } catch (e) {
+            console.warn('Failed to load cache:', e);
+        }
+    }
+})();
+
 // ─── Init ───
 fetchDashboardData();
 setInterval(fetchDashboardData, 30000);
 initLocationSearch();
+initDSModal();
+
+// ─── Data Source Detail Modal Helper functions ───
+function openDSModal(label, icon, val, chipsHtml) {
+    const overlay = document.getElementById('ds-modal-overlay');
+    const titleEl = document.getElementById('ds-modal-title');
+    const iconEl = document.getElementById('ds-modal-icon');
+    const textEl = document.getElementById('ds-modal-text');
+    const chipsEl = document.getElementById('ds-modal-chips');
+
+    if (!overlay || !titleEl || !textEl) return;
+
+    titleEl.textContent = label;
+    if (iconEl) {
+        iconEl.setAttribute('data-lucide', icon);
+    }
+    textEl.textContent = val;
+    if (chipsEl) {
+        chipsEl.innerHTML = chipsHtml;
+        chipsEl.style.display = chipsHtml ? 'flex' : 'none';
+    }
+    
+    if (typeof lucide !== 'undefined') lucide.createIcons();
+    overlay.style.display = 'flex';
+}
+
+function initDSModal() {
+    const overlay = document.getElementById('ds-modal-overlay');
+    const closeBtn = document.getElementById('ds-modal-close');
+    if (!overlay || !closeBtn) return;
+    
+    closeBtn.onclick = () => overlay.style.display = 'none';
+    overlay.onclick = (e) => { if (e.target === overlay) overlay.style.display = 'none'; };
+    
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && overlay.style.display !== 'none') {
+            overlay.style.display = 'none';
+        }
+    });
+}

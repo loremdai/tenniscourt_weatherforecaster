@@ -13,9 +13,16 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from langfuse.openai import OpenAI
+DISABLE_LANGFUSE = os.getenv("DISABLE_LANGFUSE", "").lower() == "true"
+if DISABLE_LANGFUSE:
+    from openai import OpenAI
+else:
+    try:
+        from langfuse.openai import OpenAI
+    except ImportError:
+        from openai import OpenAI
 
-from config import BANNED_PHRASES, LLM_BASE_URL, LLM_DIAGNOSIS_MODEL
+from config import BANNED_PHRASES, LLM_BASE_URL, LLM_DIAGNOSIS_MODEL, LLM_ENABLE_THINKING
 from llm_service import parse_llm_json, stream_llm_completion
 
 PROMPT_TEMPLATE = """\
@@ -313,14 +320,15 @@ def main() -> int:
         base_url=LLM_BASE_URL,
     )
 
-    print(f"Sending context to {LLM_DIAGNOSIS_MODEL} for analysis...")
+    print(f"Sending context to {LLM_DIAGNOSIS_MODEL} for analysis (thinking={LLM_ENABLE_THINKING})...")
     messages = [{"role": "user", "content": prompt}]
+    extra_body = {"enable_thinking": True} if LLM_ENABLE_THINKING else {}
 
     try:
         completion = client.chat.completions.create(
             model=LLM_DIAGNOSIS_MODEL,
             messages=messages,
-            extra_body={"enable_thinking": True},
+            extra_body=extra_body,
             stream=True,
             stream_options={"include_usage": True},
         )

@@ -43,6 +43,25 @@
             </div>
         </div>
     </div>
+
+    <!-- Data Source Detail Modal Overlay -->
+    <div class="location-search-overlay" id="ds-modal-overlay" style="display:none;">
+        <div class="location-search-box ds-modal-box">
+            <div class="location-search-header ds-modal-header">
+                <span class="ds-modal-title-wrap">
+                    <i id="ds-modal-icon" data-lucide="database" style="width:16px;height:16px;color:var(--blue);"></i>
+                    <span id="ds-modal-title" class="ds-modal-title">数据详情</span>
+                </span>
+                <button class="location-search-close" id="ds-modal-close" aria-label="关闭">
+                    <i data-lucide="x" style="width:16px;height:16px;"></i>
+                </button>
+            </div>
+            <div class="ds-modal-content">
+                <p id="ds-modal-text" class="ds-modal-text"></p>
+                <div id="ds-modal-chips" class="ds-chips" style="margin-top: 15px;"></div>
+            </div>
+        </div>
+    </div>
         <div class="header-right">
             <span class="ntp-clock"><i data-lucide="clock" style="width:13px;height:13px;"></i><span class="ntp-h" id="ntp-h">--</span><span class="ntp-colon">:</span><span class="ntp-m" id="ntp-m">--</span><span class="ntp-colon">:</span><span class="ntp-s" id="ntp-s">--</span></span>
             <span id="update-time" class="update-time">最后更新: --:--</span>

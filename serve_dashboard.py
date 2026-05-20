@@ -213,6 +213,29 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             "lat": round(lat, 6),
         }
         _write_runtime_location(location)
+
+        # Write intermediate forecast and diagnosis immediately so that frontend
+        # sees the new location and skeleton loader instantly.
+        forecast_path = Path(DIRECTORY) / "output" / "forecast.json"
+        diagnosis_path = Path(DIRECTORY) / "output" / "diagnosis.json"
+        try:
+            forecast_path.parent.mkdir(parents=True, exist_ok=True)
+            forecast_path.write_text(
+                json.dumps({
+                    "llm_generating": True,
+                    "court": location
+                }, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8"
+            )
+            diagnosis_path.write_text(
+                json.dumps({
+                    "llm_generating": True
+                }, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8"
+            )
+        except Exception as e:
+            print(f"Warning: failed to write intermediate files in API: {e}", file=sys.stderr)
+
         self._json_response({"ok": True, "location": location})
 
 

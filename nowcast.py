@@ -517,7 +517,7 @@ def create_radar_contact_sheet(
     if not images:
         return ""
 
-    thumb_w = 260
+    thumb_w = 160
     label_h = 28
     pad = 10
     thumbs: list[tuple[dict[str, str], Image.Image]] = []
@@ -549,7 +549,7 @@ def create_radar_contact_sheet(
         sheet.alpha_composite(thumb, (x, y))
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    sheet.convert("RGB").save(output_path, quality=92)
+    sheet.convert("RGB").save(output_path, quality=75)
     return str(output_path)
 
 

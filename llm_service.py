@@ -22,6 +22,7 @@ from config import (
     BANNED_PHRASES,
     LLM_BASE_URL,
     LLM_DIAGNOSIS_MODEL,
+    LLM_ENABLE_THINKING,
     RADAR_VISION_MODEL,
     RADAR_VISUAL_QA_FALLBACK,
 )
@@ -30,34 +31,45 @@ from risk_engine import compute_playability, compute_risk_scores
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# Langfuse LLM Observability
-# ═══════════════════════════════════════════════════════════════════════════════
+DISABLE_LANGFUSE = os.getenv("DISABLE_LANGFUSE", "").lower() == "true"
 
-try:
-    from langfuse import observe as langfuse_observe
-    from langfuse import Langfuse
-
-    _langfuse = Langfuse()
-    LANGFUSE_AVAILABLE = _langfuse.auth_check()
-    if LANGFUSE_AVAILABLE:
-        print("Langfuse LLM observability: enabled", flush=True)
-    else:
-        print(
-            "Langfuse: auth check failed, running without observability.",
-            flush=True,
-        )
-except Exception:
+if DISABLE_LANGFUSE:
     LANGFUSE_AVAILABLE = False
     _langfuse = None
+    print("Langfuse LLM observability: disabled (via DISABLE_LANGFUSE)", flush=True)
 
-    def langfuse_observe(*args, **kwargs):  # noqa: F811 – fallback no-op decorator
+    def langfuse_observe(*args, **kwargs):
         if args and callable(args[0]):
             return args[0]
-
         def _wrap(fn):
             return fn
-
         return _wrap
+else:
+    try:
+        from langfuse import observe as langfuse_observe
+        from langfuse import Langfuse
+
+        _langfuse = Langfuse()
+        LANGFUSE_AVAILABLE = _langfuse.auth_check()
+        if LANGFUSE_AVAILABLE:
+            print("Langfuse LLM observability: enabled", flush=True)
+        else:
+            print(
+                "Langfuse: auth check failed, running without observability.",
+                flush=True,
+            )
+    except Exception:
+        LANGFUSE_AVAILABLE = False
+        _langfuse = None
+
+        def langfuse_observe(*args, **kwargs):  # noqa: F811 – fallback no-op decorator
+            if args and callable(args[0]):
+                return args[0]
+
+            def _wrap(fn):
+                return fn
+
+            return _wrap
 
 
 def flush_langfuse() -> None:
@@ -189,10 +201,13 @@ def run_llm_diagnosis(
     from diagnose_forecast import PROMPT_TEMPLATE, check_banned_phrases
 
     try:
-        from langfuse.openai import OpenAI
+        if LANGFUSE_AVAILABLE:
+            from langfuse.openai import OpenAI
+        else:
+            from openai import OpenAI
     except ImportError:
         print(
-            "Warning: langfuse/openai package not installed, skipping LLM diagnosis.",
+            "Warning: openai package not installed, skipping LLM diagnosis.",
             file=sys.stderr,
         )
         return None
@@ -204,12 +219,13 @@ def run_llm_diagnosis(
 
     client = OpenAI(api_key=key, base_url=LLM_BASE_URL, timeout=timeout)
 
-    print(f"Sending context to {LLM_DIAGNOSIS_MODEL} for analysis...", flush=True)
+    print(f"Sending context to {LLM_DIAGNOSIS_MODEL} for analysis (thinking={LLM_ENABLE_THINKING})...", flush=True)
+    extra_body = {"enable_thinking": True} if LLM_ENABLE_THINKING else {}
     try:
         completion = client.chat.completions.create(
             model=LLM_DIAGNOSIS_MODEL,
             messages=[{"role": "user", "content": prompt}],
-            extra_body={"enable_thinking": True},
+            extra_body=extra_body,
             stream=True,
             stream_options={"include_usage": True},
         )
@@ -410,7 +426,10 @@ radar_confidence_adjustment: down | neutral | up
 """
 
     try:
-        from langfuse.openai import OpenAI
+        if LANGFUSE_AVAILABLE:
+            from langfuse.openai import OpenAI
+        else:
+            from openai import OpenAI
 
         image_bytes = Path(contact_sheet).read_bytes()
         image_url = "data:image/jpeg;base64," + base64.b64encode(image_bytes).decode(

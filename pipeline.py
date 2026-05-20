@@ -6,8 +6,10 @@ data fetch → radar analysis → visual QA → booking decision → LLM diagnos
 
 from __future__ import annotations
 
+import copy
 import json
 import sys
+import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -42,9 +44,39 @@ from llm_service import (
 )
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# Time Utilities
-# ═══════════════════════════════════════════════════════════════════════════════
+def is_location_changed_or_first_run(
+    args: argparse.Namespace, current_court: dict[str, Any]
+) -> bool:
+    """Check if the location has changed or if it is the first run."""
+    forecast_path = Path(args.output)
+    diag_path = Path(args.diagnosis_output)
+    if not forecast_path.is_file() or not diag_path.is_file():
+        return True
+
+    try:
+        old_forecast = json.loads(forecast_path.read_text(encoding="utf-8"))
+        old_court = old_forecast.get("court", {})
+
+        lon_match = (
+            abs(float(old_court.get("lon", 0)) - float(current_court["lon"]))
+            < 1e-4
+        )
+        lat_match = (
+            abs(float(old_court.get("lat", 0)) - float(current_court["lat"]))
+            < 1e-4
+        )
+        name_match = old_court.get("name") == current_court["name"]
+
+        if not (lon_match and lat_match and name_match):
+            return True
+
+        old_diag = json.loads(diag_path.read_text(encoding="utf-8"))
+        if old_diag.get("llm_generating") and len(old_diag) <= 2:
+            return True
+
+        return False
+    except Exception:
+        return True
 
 
 def compute_lead_time(target_time_str: str, now: datetime) -> tuple[float, str]:
@@ -148,6 +180,123 @@ def _print_booking_summary(booking: dict[str, Any]) -> None:
     print("=" * 50 + "\n")
 
 
+def run_background_visual_qa_flow(
+    report_copy: dict[str, Any],
+    row_copy: dict[str, Any],
+    args: argparse.Namespace,
+    now: datetime,
+) -> None:
+    try:
+        ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        print(f"[{ts}] [Async Visual QA] Background thread started.", flush=True)
+
+        # 1. Run visual QA API call (takes a few seconds)
+        radar_visual_qa = run_radar_visual_qa(
+            report_copy, args.api_key, timeout=args.llm_timeout
+        )
+        print(
+            f"[{ts}] [Async Visual QA] Visual QA finished. Result: "
+            f"{radar_visual_qa.get('radar_confidence_adjustment')}",
+            flush=True,
+        )
+
+        # 2. Update report with visual QA results
+        report_copy["radar_visual_qa"] = radar_visual_qa
+        risk_scores = apply_radar_visual_qa_to_report(
+            report_copy, row_copy, radar_visual_qa
+        )
+
+        # 3. Re-run booking decision
+        lead_hours, target_str = compute_lead_time(args.target_time, now)
+        qpf_all_zero = not check_qpf_rain(row_copy, 20)
+        station = report_copy.get("station_realtime", {})
+        base_booking = booking_decision(
+            risk_scores=risk_scores,
+            lead_time_hours=lead_hours,
+            target_time_str=target_str,
+            play_duration_minutes=args.play_duration,
+            hourly_forecast=station.get("hourly_forecast", []),
+            seven_day_forecast=station.get("seven_day_forecast", []),
+            qpf6min_all_zero=qpf_all_zero,
+            rain_flag=station.get("rain_2h_flag", 0) or 0,
+            grid_realtime=station,
+            now=now,
+        )
+        base_booking["next_rain_time"] = compute_next_rain_time(
+            now, report_copy, station
+        )
+        if "window_hourly_rain_count" in base_booking:
+            del base_booking["window_hourly_rain_count"]
+
+        # 4. Re-run diagnosis
+        if args.no_llm:
+            booking = base_booking
+            playability = report_copy.get("playability", {}).get("30min", {})
+            if playability.get("score", -1) == 0 and "cancel" not in booking.get(
+                "decision", ""
+            ):
+                booking["decision"] = "suggest_cancel"
+                booking["decision_cn"] = "建议取消或改期"
+                booking["reason"].insert(0, "综合可打率评估为不可打，触发安全否决机制")
+            report_copy["booking"] = booking
+        else:
+            context = extract_context(report_copy)
+            context["booking_meta"] = base_booking
+
+            diagnosis = run_llm_diagnosis(
+                context,
+                args.api_key,
+                Path(args.diagnosis_output),
+                timeout=args.llm_timeout,
+            )
+
+            llm_booking = diagnosis.get("booking", {}) if diagnosis else {}
+            if not llm_booking:
+                llm_booking = {
+                    "decision": "keep_but_recheck",
+                    "decision_cn": "大模型未返回决策，建议赛前复查",
+                    "check_again_at": "",
+                    "reason": ["解析诊断失败"],
+                    "caveat": [],
+                }
+            booking = {**base_booking, **llm_booking}
+
+            # Post-validation: playability veto
+            playability = report_copy.get("playability", {}).get("30min", {})
+            if playability.get("score", -1) == 0 and "cancel" not in booking.get(
+                "decision", ""
+            ):
+                booking["decision"] = "suggest_cancel"
+                booking["decision_cn"] = "建议取消或改期"
+                booking["reason"].insert(
+                    0, "AI决策已被安全否决机制覆盖，强降雨预警"
+                )
+            report_copy["booking"] = booking
+
+        # 5. Save updated report to disk
+        save_calibration_log(report_copy, risk_scores)
+        output = Path(args.output)
+        report_copy.pop("llm_generating", None)
+
+        if not args.once:
+            next_at = datetime.now().astimezone() + timedelta(seconds=args.interval)
+            report_copy["next_update_at"] = next_at.isoformat(timespec="seconds")
+
+        output.write_text(
+            json.dumps(report_copy, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        print(f"[{ts}] [Async Visual QA] Wrote updated forecast to {output}", flush=True)
+        _print_booking_summary(booking)
+
+    except Exception as e:
+        print(
+            f"Error in background visual QA thread: {e}",
+            file=sys.stderr,
+            flush=True,
+        )
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # Main Pipeline
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -211,18 +360,19 @@ def run_once(args: argparse.Namespace) -> None:
 
     # ---- Fast Feedback: Write intermediate report ----
     # Save the preliminary report before time-consuming LLM steps
-    report["llm_generating"] = True
-    output = Path(args.output)
-    output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(
-        json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
-    )
-    # Write intermediate diagnosis to show skeletons on frontend
-    diag_output = Path(args.diagnosis_output)
-    diag_output.parent.mkdir(parents=True, exist_ok=True)
-    diag_output.write_text(
-        json.dumps({"llm_generating": True}, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
-    )
+    if is_location_changed_or_first_run(args, COURT):
+        report["llm_generating"] = True
+        output = Path(args.output)
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(
+            json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+        )
+        # Write intermediate diagnosis to show skeletons on frontend
+        diag_output = Path(args.diagnosis_output)
+        diag_output.parent.mkdir(parents=True, exist_ok=True)
+        diag_output.write_text(
+            json.dumps({"llm_generating": True}, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+        )
 
     # ---- Step 3: Radar visual QA ----
     risk_scores = report.get("risk_scores", {})
@@ -235,6 +385,8 @@ def run_once(args: argparse.Namespace) -> None:
         "run": False,
         "reason": visual_qa_reason,
     }
+
+    radar_visual_qa_trigger_run = False
 
     if args.no_llm:
         print(f"[{ts}] Skipping radar visual QA because --no-llm is set.", flush=True)
@@ -256,13 +408,13 @@ def run_once(args: argparse.Namespace) -> None:
         )
     else:
         print(
-            f"[{ts}] Running radar visual QA ({args.radar_vision}, {visual_qa_reason})...",
+            f"[{ts}] Deferring radar visual QA to background thread ({args.radar_vision}, {visual_qa_reason})...",
             flush=True,
         )
-        report["radar_visual_qa_trigger"]["run"] = True
-        radar_visual_qa = run_radar_visual_qa(
-            report, args.api_key, timeout=args.llm_timeout
-        )
+        # Main thread uses a quick skipped state to proceed immediately
+        radar_visual_qa = _radar_visual_qa_skip("雷达质检已在后台异步运行。")
+        radar_visual_qa_trigger_run = True
+
     risk_scores = apply_radar_visual_qa_to_report(report, row, radar_visual_qa)
 
     # ---- Step 4: Booking decision ----
@@ -338,17 +490,30 @@ def run_once(args: argparse.Namespace) -> None:
     output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)
     report.pop("llm_generating", None)
-    output.write_text(
-        json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
-    )
-    print(f"[{ts}] Wrote {output}")
-
-    _print_booking_summary(booking)
 
     # Stamp next_update_at after ALL processing (incl. LLM)
     if not args.once:
         next_at = datetime.now().astimezone() + timedelta(seconds=args.interval)
         report["next_update_at"] = next_at.isoformat(timespec="seconds")
-        output.write_text(
-            json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+
+    output.write_text(
+        json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    )
+    print(f"[{ts}] Wrote {output}", flush=True)
+
+    _print_booking_summary(booking)
+
+    # Start the async visual QA thread if triggered
+    if radar_visual_qa_trigger_run:
+        report_copy = copy.deepcopy(report)
+        report_copy["radar_visual_qa_trigger"]["run"] = True
+        row_copy = copy.deepcopy(row)
+        t = threading.Thread(
+            target=run_background_visual_qa_flow,
+            args=(report_copy, row_copy, args, now),
+            daemon=True
         )
+        t.start()
+        if args.once:
+            print(f"[{ts}] [Async Visual QA] Waiting for background thread to complete (--once is active)...", flush=True)
+            t.join()
