@@ -60,47 +60,64 @@ The system ships with a background data-fetching daemon, a modern OLED-dark-mode
 ## Architecture / 系统架构
 
 ```
-┌──────────────────────────────────────────────────────────────────┐
-│                        main.py  (Orchestrator)                   │
-│         Fetch → Analyze → Visual QA → Decide → Diagnose          │
-└────────┬─────────────┬──────────────┬──────────────┬─────────────┘
-         │             │              │              │
-         ▼             ▼              ▼              ▼
-  ┌─────────────┐ ┌──────────┐ ┌────────────┐ ┌──────────────────┐
-  │ nowcast.py  │ │risk_     │ │diagnose_   │ │   frontend/      │
-  │             │ │engine.py │ │forecast.py │ │                  │
-  │ CAPPI Radar │ │          │ │            │ │  index.html      │
-  │ Optical Flow│ │ 4-Layer  │ │ GLM-5 LLM  │ │  css/style.css   │
-  │ dBZ Mapping │ │ Risk     │ │ Prompt Eng │ │  js/app.js       │
-  │ QPF Parsing │ │ 5-Dim    │ │            │ │                  │
-  │ Grid Weather│ │ Playable │ │ Qwen 3.6+  │ │                  │
-  │ Contact Sht │ │ Wetness  │ │ Radar QA   │ │                  │
-  └──────┬──────┘ └────┬─────┘ └─────┬──────┘ └────────┬─────────┘
-         │             │             │                  │
-         └─────────────┴─────────────┘                  │
-                       │                                │
-                       ▼                                │
-              ┌─────────────────┐                       │
-              │   output/       │◄──────────────────────┘
-              │                 │   (reads JSON via HTTP)
-              │ forecast.json   │
-              │ diagnosis.json  │
-              │ debug_*.png     │
-              │ radar_contact   │
-              │ calibration_log │
-              └─────────────────┘
+                         ┌──────────────────────┐
+                         │      main.py         │
+                         │    CLI 入口 + 参数    │
+                         └──────────┬───────────┘
+                                    │
+                         ┌──────────▼───────────┐
+                         │    pipeline.py       │
+                         │   流水线编排 + 守护    │
+                         └──┬─────┬────────┬────┘
+                            │     │        │
+              ┌─────────────▼┐    │   ┌────▼──────────────┐
+              │  nowcast.py  │    │   │  llm_service.py   │
+              │  雷达协调层   │    │   │  LLM + Langfuse   │
+              │  (re-export) │    │   └────┬──────────────┘
+        ┌─────┴──────┐       │    │        │
+        │            │       │    │   ┌────▼──────────────┐
+   ┌────▼────┐ ┌─────▼─────┐ │    │   │diagnose_forecast │
+   │  data   │ │  radar    │ │    │   │   GLM-5 提示工程  │
+   │ fetcher │ │ processor │ │    │   └──────────────────┘
+   │  API/IO │ │ 图像+光流  │ │    │
+   └─────────┘ └───────────┘ │    │
+                      ┌──────▼────▼──────────┐
+                      │   risk_engine.py     │
+                      │  四层风险 (re-export) │
+                      └──┬───────────┬───────┘
+                    ┌────▼────┐ ┌────▼──────────┐
+                    │playabi- │ │booking_engine │
+                    │lity.py  │ │  预约决策引擎  │
+                    │五维评分  │ └───────────────┘
+                    └─────────┘
+   ┌──────────┐                  ┌──────────────────┐
+   │config.py │  ← 全局配置       │   frontend/      │
+   │utils.py  │  ← 公共工具       │   OLED Bento UI  │
+   └──────────┘                  └──────┬───────────┘
+                                        │ reads JSON
+                      ┌─────────────────▼────────────┐
+                      │serve_dashboard.py → output/  │
+                      └──────────────────────────────┘
 ```
 
 ### Module Breakdown / 模块说明
 
-| Module | Role |
-|:---|:---|
-| **`main.py`** | Orchestrator — coordinates fetch, analysis, radar visual QA, decision, and diagnosis pipeline. Supports single-shot and daemon modes. Includes multimodal radar visual QA trigger logic and LLM-driven booking decisions. <br/> 主入口：协调数据抓取、分析、雷达视觉审查、决策与诊断流程，支持单次执行和守护模式。 |
-| **`nowcast.py`** | Core algorithm — fetches CAPPI radar imagery, converts to dBZ grids, applies Farneback optical-flow for echo motion extrapolation, fetches grid-interpolated weather from dual APIs, generates radar contact sheets, and computes rain probability within a configurable radius. <br/> 核心算法模块：下载 CAPPI 雷达图、转换 dBZ 网格、光流外推回波运动、双 API 数据采集、生成雷达拼图、计算指定半径内降雨概率。 |
-| **`risk_engine.py`** | Decision engine — frame quality control, dual-window trend analysis, upstream echo detection, four-layer risk scoring, five-dimensional playability scoring (with court wetness state model and heat index), booking decisions, and calibration logging. <br/> 风险决策引擎：帧质量控制、双窗口趋势分析、上游回波检测、四层风险评分、五维可打率评分（含场地蒸发模型和热指数）、预约决策与校准日志。 |
-| **`diagnose_forecast.py`** | LLM diagnostic layer — builds precisely constrained prompts, queries GLM-5 with thinking mode, enforces conservative-language guardrails and banned-phrase detection, and outputs structured natural-language reports. <br/> LLM 诊断模块：构建约束提示词、调用 GLM-5（思考模式），输出结构化自然语言诊断报告，内含敏感措辞检测。 |
-| **`serve_dashboard.py`** | Lightweight HTTP server — serves the static frontend and output data with no-cache headers for real-time data freshness. <br/> 轻量 HTTP 服务器：托管前端页面和输出数据，禁用缓存确保数据实时性。 |
-| **`frontend/`** | Static dashboard — zero-state Bento Grid UI consuming JSON from `output/`, auto-refreshing every 30 seconds. <br/> 静态前端看板：读取 `output/` 目录的 JSON 数据，每 30 秒自动刷新。 |
+| Module | Lines | Role |
+|:---|:---:|:---|
+| **`main.py`** | 270 | CLI entry point — parses arguments and invokes the pipeline. <br/> CLI 入口：解析命令行参数，调用 pipeline。 |
+| **`config.py`** | 316 | Centralized configuration — all hyperparameters, API templates, thresholds, and constants. <br/> 集中配置：所有超参数、API 模板、阈值和常量。 |
+| **`utils.py`** | 37 | Shared utilities — lightweight `.env` loader. <br/> 公共工具：轻量 `.env` 加载器。 |
+| **`pipeline.py`** | 519 | Workflow orchestration — coordinates fetch → analyze → visual QA → decide → diagnose. Supports single-shot and daemon modes. <br/> 流水线编排：协调数据采集、分析、视觉审查、决策和诊断，支持单次和守护模式。 |
+| **`data_fetcher.py`** | 175 | Data I/O layer — GD121 API requests, grid weather API, CAPPI frame download, and cache cleanup. <br/> 数据获取层：API 请求、CAPPI 帧下载与缓存管理（纯 I/O，零计算）。 |
+| **`radar_processor.py`** | 584 | Radar image processing — pixel→dBZ conversion, geo-coordinate mapping, Farneback optical flow, dBZ extrapolation, area statistics, rain probability, and visualization. <br/> 雷达处理层：像素→dBZ 反算、坐标转换、光流估计、帧外推、统计分析与可视化。 |
+| **`nowcast.py`** | 642 | Radar coordination — data structures (Bounds/Frame), API response parsing, station data extraction, and report assembly (`build_report`). Re-exports `data_fetcher` and `radar_processor` for backward compatibility. <br/> 雷达协调层：数据结构定义、响应解析、气象站数据提取和报告组装，通过 re-export 保持下游兼容。 |
+| **`risk_engine.py`** | 497 | Core risk computation — frame quality control, dual-window trend analysis, upstream echo detection, four-layer fusion risk scoring, and calibration logging. Re-exports `playability` and `booking_engine`. <br/> 风险计算核心：帧质量、趋势分析、上游检测、四层融合评分和标定日志。 |
+| **`playability.py`** | 590 | Playability scoring — five-dimensional assessment (rain/thermal/wind/AQI/nowcast) with semi-physical court wetness model, dynamic weight adjustment, hard veto logic, and per-horizon grades. <br/> 可打性评分：五维子评分 + 场地湿度衰减模型 + 动态权重 + 否决机制。 |
+| **`booking_engine.py`** | 248 | Booking decisions — three-band lead-time logic (0–2h/2–6h/6h+) with hourly forecast scanning, pre-window rain detection, and recheck scheduling. <br/> 预约决策引擎：按提前量分三档决策 + 逐时预报扫描 + 复查时间安排。 |
+| **`llm_service.py`** | 496 | LLM integration — DashScope API calls (GLM-5 + Qwen 3.6 Plus), radar visual QA trigger logic, and Langfuse observability. <br/> LLM 服务层：DashScope 调用、雷达视觉审查触发、Langfuse 可观测性。 |
+| **`diagnose_forecast.py`** | 360 | LLM prompt engineering — constrained prompts for GLM-5, conservative language guardrails, banned-phrase detection, and structured report output. <br/> LLM 提示工程：约束提示词、保守措辞护栏、敏感词检测和结构化报告。 |
+| **`serve_dashboard.py`** | 242 | HTTP server — serves frontend and output data with no-cache headers. <br/> HTTP 服务器：托管前端和输出数据，禁用缓存。 |
+| **`frontend/`** | — | Static dashboard — OLED dark-mode Bento Grid UI, auto-refreshes every 30 seconds. <br/> 前端看板：深色模式 Bento Grid 布局，每 30 秒刷新。 |
 
 ---
 
@@ -198,7 +215,7 @@ The dashboard auto-refreshes every 30 seconds.
 
 ### Customizing Your Court Location / 自定义监控场地
 
-The system defaults to "科技四路网球场" tennis court. To target your own court, edit the `COURT` variable at the top of `nowcast.py`:
+The system defaults to "科技四路网球场" tennis court. To target your own court, edit the `COURT` variable in `config.py`:
 
 ```python
 COURT = {
@@ -265,19 +282,36 @@ Options:
 
 ```
 weather_forcaster/
-├── main.py                 # Entry point / orchestrator
-├── nowcast.py              # CAPPI radar + optical flow engine
-├── risk_engine.py          # Four-layer risk + five-dim playability + wetness model
-├── diagnose_forecast.py    # LLM diagnostic layer (GLM-5)
-├── serve_dashboard.py      # HTTP server for dashboard
-├── requirements.txt        # Python dependencies
-├── default                 # Nginx production config (reference)
+│
+│── Entry & Orchestration ──────────────────────────
+├── main.py                 # CLI entry point / CLI 入口
+├── config.py               # Centralized configuration / 集中配置
+├── utils.py                # Shared utilities / 公共工具
+├── pipeline.py             # Workflow orchestration / 流水线编排
+│
+│── Radar Data Pipeline ────────────────────────────
+├── data_fetcher.py         # API I/O + cache / 数据获取与缓存
+├── radar_processor.py      # Image processing + optical flow / 雷达图像处理
+├── nowcast.py              # Radar coordination + report / 雷达协调与报告组装
+│
+│── Risk & Decision ────────────────────────────────
+├── risk_engine.py          # Four-layer risk scoring / 四层风险评分
+├── playability.py          # Five-dim playability / 五维可打性评分
+├── booking_engine.py       # Booking decisions / 预约决策引擎
+│
+│── LLM Layer ──────────────────────────────────────
+├── llm_service.py          # LLM API + Langfuse / LLM 服务层
+├── diagnose_forecast.py    # GLM-5 prompt engineering / 提示工程
+│
+│── Frontend & Server ──────────────────────────────
+├── serve_dashboard.py      # HTTP server / 看板服务器
 ├── frontend/
-│   ├── index.html          # Dashboard UI (Bento Grid layout)
+│   ├── index.html          # Dashboard UI (Bento Grid)
 │   ├── css/style.css       # OLED dark mode styles
 │   └── js/app.js           # Dashboard logic + auto-refresh
-├── data/
-│   └── cappi/              # Cached CAPPI radar PNG frames
+│
+│── Data & Output ──────────────────────────────────
+├── data/cappi/             # Cached CAPPI radar PNG frames
 ├── output/
 │   ├── forecast.json       # Latest analysis report
 │   ├── diagnosis.json      # Latest LLM diagnosis
@@ -285,6 +319,8 @@ weather_forcaster/
 │   ├── radar_contact_sheet.jpg
 │   ├── calibration_log.jsonl
 │   └── radar_frames/       # Timeline player frames
+│
+├── requirements.txt        # Python dependencies
 ├── LICENSE                 # MIT License
 ├── .env                    # API keys (gitignored)
 ├── .gitignore
@@ -345,26 +381,20 @@ Outputs per-horizon risk scores, playability grades, and a booking decision with
 
 ### VPS Production Deployment / VPS 生产部署
 
-The project includes an Nginx configuration file (`default`) for production deployment:
-
 ```bash
 # 1. Clone the project on your VPS
-git clone https://github.com/loremdai/tenniscourt_weatherforcaster.git /var/www/weather_forcaster
+git clone https://github.com/loremdai/tenniscourt_weatherforecaster.git /var/www/weather_forcaster
 
 # 2. Install dependencies
 cd /var/www/weather_forcaster
 pip install -r requirements.txt
 
-# 3. Copy Nginx config
-sudo cp default /etc/nginx/sites-available/default
-sudo nginx -t && sudo systemctl reload nginx
+# 3. Configure Nginx to serve frontend/ and output/ with no-cache headers
+# 参考 Nginx 配置：托管 frontend/ 目录和 output/ 数据，设置无缓存头
 
 # 4. Start the daemon in background
 nohup python3 main.py --daemon > /dev/null 2>&1 &
 ```
-
-The Nginx config serves the frontend directly and proxies `output/` data with no-cache headers.
-Nginx 配置直接托管前端静态文件，并为 `output/` 目录配置无缓存头。
 
 ---
 
