@@ -11,3 +11,6 @@ output/
 .agent/
 .idea/
 .env
+
+vps_commands.md
+default

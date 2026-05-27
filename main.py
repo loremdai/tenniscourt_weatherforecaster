@@ -38,46 +38,11 @@ from pathlib import Path
 # 环境变量加载
 # ═══════════════════════════════════════════════════════════════════════════════
 
-
-def _load_dotenv(path: str = ".env") -> None:
-    """从 .env 文件中加载 key=value 键值对到 os.environ。
-
-    此函数是一个轻量级的自实现 dotenv 加载器，避免引入 python-dotenv
-    第三方依赖。
-
-    规则：
-        - 忽略空行和以 '#' 开头的注释行
-        - 忽略不含 '=' 的行
-        - 自动去除 key/value 两端的空白，以及 value 外层的引号
-        - 不会覆盖系统已有的同名环境变量（优先级：系统 > .env）
-
-    Args:
-        path: .env 文件的路径，默认为项目根目录下的 ".env"。
-    """
-    env_path = Path(path)
-    if not env_path.is_file():
-        return
-    for line in env_path.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        # 跳过空行和注释行
-        if not line or line.startswith("#"):
-            continue
-        # 跳过不含 '=' 的无效行
-        if "=" not in line:
-            continue
-        # 按第一个 '=' 拆分为 key 和 value
-        key, _, value = line.partition("=")
-        key = key.strip()
-        # 去除 value 外层可能存在的单引号或双引号
-        value = value.strip().strip("'\"")
-        # 仅在系统中尚未设置该变量时才写入（不覆盖已有值）
-        if key and key not in os.environ:
-            os.environ[key] = value
-
+from utils import load_dotenv  # noqa: E402 — 必须在其他本地模块之前执行
 
 # 在模块导入阶段立即执行 dotenv 加载，
 # 确保后续导入的模块（如 llm_service）在初始化时就能读到环境变量。
-_load_dotenv()
+load_dotenv()
 
 # 本地模块 —— 必须在 dotenv 加载之后再导入，
 # 因为 llm_service 初始化时会读取 Langfuse 相关的环境变量。

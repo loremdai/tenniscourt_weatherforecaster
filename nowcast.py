@@ -1,44 +1,37 @@
-#!/usr/bin/env python3
-"""CAPPI radar nowcast MVP for 科技四路文体公园.
+"""CAPPI 雷达短临预报核心模块。
 
-Reads a captured weather response, downloads the CAPPI PNG frames it references,
-maps radar pixels to approximate dBZ, extrapolates motion with OpenCV optical
-flow, and emits a JSON rain-probability report for one fixed tennis court.
+本模块是雷达数据链路的协调层，负责：
+    1. 定义公共数据结构（Bounds、Frame）
+    2. 解析 API 响应中的雷达元数据（帧列表、地理范围、时间戳）
+    3. 提取气象站实况和预报数据
+    4. 组装完整的预报报告（build_report）
+
+具体的网络 I/O 操作由 data_fetcher.py 负责，
+具体的图像处理与计算由 radar_processor.py 负责。
+本模块通过 re-export 将它们的公共接口统一暴露，
+下游模块可以继续使用 ``from nowcast import XXX`` 而无需改动。
 """
 
 from __future__ import annotations
 
-import argparse
 import json
-import math
 import re
 import sys
-import time
-import urllib.request
-import ssl
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-import cv2
 import numpy as np
-from PIL import Image, ImageDraw
+from PIL import Image
 
 from config import (
     COURT,
     RADIUS_KM,
     RADAR_ECHO_THRESHOLD_DBZ,
     PLAYABLE_RAIN_THRESHOLD_DBZ,
-    ALPHA_THRESHOLD,
     HORIZONS,
-    EARTH_RADIUS_KM,
     SOURCE_TZ,
-    API_URL_TEMPLATE,
-    API_HEADERS,
-    RA_API_URL_TEMPLATE,
-    RA_API_HEADERS,
-    DBZ_PALETTE,
 )
 from risk_engine import (
     frame_quality,
@@ -49,9 +42,50 @@ from risk_engine import (
     compute_playability,
 )
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# Re-export：将拆分后的子模块接口统一暴露
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+# 下游模块（pipeline.py、llm_service.py 等）仍可通过
+#   from nowcast import fetch_weather_data, court_mask, ...
+# 的方式导入，无需感知内部拆分。
+
+from data_fetcher import (  # noqa: F401
+    fetch_weather_data,
+    fetch_grid_weather,
+    load_response,
+    download_frame,
+    cleanup_cache,
+)
+from radar_processor import (  # noqa: F401
+    image_to_dbz,
+    lon_lat_to_pixel,
+    pixel_grids,
+    haversine_km,
+    court_mask,
+    estimate_motion,
+    translate_dbz,
+    dbz_to_rain_rate,
+    summarize_area,
+    probability_from_stats,
+    confidence_label,
+    create_debug_image,
+    save_radar_frames,
+    create_radar_contact_sheet,
+)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 公共数据结构
+# ═══════════════════════════════════════════════════════════════════════════════
+
 
 @dataclass(frozen=True)
 class Bounds:
+    """CAPPI 雷达图的地理边界（经纬度范围）。
+
+    对应 API 返回的 cappi_bounds 字段，用于像素 ↔ 经纬度的坐标转换。
+    """
     min_lat: float
     min_lon: float
     max_lat: float
@@ -60,6 +94,11 @@ class Bounds:
 
 @dataclass(frozen=True)
 class Frame:
+    """一帧 CAPPI 雷达数据。
+
+    包含该帧的时间戳、图片 URL、本地缓存路径、
+    反算后的 dBZ 数组和原始 RGBA 图像。
+    """
     timestamp: datetime
     url: str
     path: Path
@@ -67,89 +106,26 @@ class Frame:
     rgba: Image.Image
 
 
-def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="CAPPI court-radius rain nowcast MVP")
-    parser.add_argument(
-        "--response",
-        default="response.txt",
-        help="Captured JSON response containing cappi/cappi_bounds fields.",
-    )
-    parser.add_argument(
-        "--cache-dir",
-        default="data/cappi",
-        help="Directory for downloaded CAPPI PNG files.",
-    )
-    parser.add_argument(
-        "--output",
-        default="output/forecast.json",
-        help="Output JSON report path. Use '-' for stdout only.",
-    )
-    parser.add_argument(
-        "--debug-image",
-        default="output/debug_court_radius.png",
-        help="Optional debug image path showing court radius. Use '' to skip.",
-    )
-    parser.add_argument(
-        "--max-frames",
-        type=int,
-        default=12,
-        help="Maximum newest CAPPI frames to use.",
-    )
-    parser.add_argument(
-        "--daemon",
-        action="store_true",
-        help="Run continuously, fetching data from the API.",
-    )
-    parser.add_argument(
-        "--interval",
-        type=int,
-        default=360,
-        help="Interval in seconds between API fetches in daemon mode (default: 360).",
-    )
-    return parser.parse_args()
-
-
-def load_response(path: Path) -> dict[str, Any]:
-    return json.loads(path.read_text(encoding="utf-8"))
-
-
-def fetch_weather_data(lon: float, lat: float, timeout: float = 30) -> dict[str, Any]:
-    url = API_URL_TEMPLATE.format(lon=lon, lat=lat)
-    ctx = ssl.create_default_context()
-    ctx.check_hostname = False
-    ctx.verify_mode = ssl.CERT_NONE
-
-    req = urllib.request.Request(url, headers=API_HEADERS)
-    with urllib.request.urlopen(req, context=ctx, timeout=timeout) as response:
-        data = response.read().decode("utf-8")
-        return json.loads(data)
-
-
-def fetch_grid_weather(
-    lon: float, lat: float, timeout: float = 15
-) -> dict[str, Any] | None:
-    """Fetch grid-interpolated real-time weather from ra.gd121.cn.
-
-    Returns precise weather data at the exact coordinates (not from a distant station).
-    Returns None on failure so the system can fall back gracefully.
-    """
-    url = RA_API_URL_TEMPLATE.format(lon=lon, lat=lat)
-    ctx = ssl.create_default_context()
-    ctx.check_hostname = False
-    ctx.verify_mode = ssl.CERT_NONE
-
-    try:
-        req = urllib.request.Request(url, headers=RA_API_HEADERS)
-        with urllib.request.urlopen(req, context=ctx, timeout=timeout) as response:
-            raw = json.loads(response.read().decode("utf-8"))
-            if raw.get("status") == 200 and "data" in raw:
-                return raw["data"]
-    except Exception as e:
-        print(f"Warning: grid weather API failed: {e}", file=sys.stderr)
-    return None
+# ═══════════════════════════════════════════════════════════════════════════════
+# API 响应解析
+# ═══════════════════════════════════════════════════════════════════════════════
 
 
 def first_row(payload: dict[str, Any]) -> dict[str, Any]:
+    """从 API 响应中取出第一行数据记录。
+
+    GD121 API 的响应格式为 ``{"rows": [{...}]}``，所有核心数据
+    （cappi、cappi_bounds、qpf6min 等）都在 rows[0] 中。
+
+    Args:
+        payload: API 响应的完整 JSON 字典。
+
+    Returns:
+        rows[0] 字典。
+
+    Raises:
+        ValueError: 响应中不包含 rows 或 rows 为空。
+    """
     rows = payload.get("rows")
     if not isinstance(rows, list) or not rows:
         raise ValueError("Response does not contain rows[0]")
@@ -159,6 +135,20 @@ def first_row(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def parse_bounds(row: dict[str, Any]) -> Bounds:
+    """解析 API 响应中的 CAPPI 地理边界。
+
+    cappi_bounds 的格式为 ``[[min_lat, min_lon], [max_lat, max_lon]]``，
+    可能是 JSON 字符串或已解析的列表。
+
+    Args:
+        row: first_row() 返回的数据记录。
+
+    Returns:
+        Bounds 对象。
+
+    Raises:
+        ValueError: cappi_bounds 缺失或格式异常。
+    """
     raw = row.get("cappi_bounds")
     if not raw:
         raise ValueError("Missing cappi_bounds")
@@ -175,6 +165,20 @@ def parse_bounds(row: dict[str, Any]) -> Bounds:
 
 
 def parse_cappi_timestamp(url: str) -> datetime:
+    """从 CAPPI 图片 URL 中提取时间戳。
+
+    URL 格式示例：``.../CAPPI_12345_20260527140000.png``
+    从中提取 14 位时间字符串并解析为 UTC+8 的 datetime。
+
+    Args:
+        url: CAPPI 帧的图片 URL。
+
+    Returns:
+        带时区的 datetime 对象。
+
+    Raises:
+        ValueError: URL 中未找到预期的时间戳格式。
+    """
     match = re.search(r"CAPPI_\d+_(\d{14})\.png", url)
     if not match:
         raise ValueError(f"Cannot parse CAPPI timestamp from URL: {url}")
@@ -182,6 +186,21 @@ def parse_cappi_timestamp(url: str) -> datetime:
 
 
 def collect_cappi(row: dict[str, Any], max_frames: int) -> list[tuple[datetime, str]]:
+    """从 API 响应中整理 CAPPI 帧列表。
+
+    提取所有帧的时间戳和 URL，按时间排序后取最近 max_frames 帧。
+    URL 中的转义斜杠 (``\\/``) 会被修正。
+
+    Args:
+        row: first_row() 返回的数据记录。
+        max_frames: 最多保留的帧数。
+
+    Returns:
+        (timestamp, url) 元组列表，按时间升序排列。
+
+    Raises:
+        ValueError: 响应中不包含 cappi 帧。
+    """
     cappi = row.get("cappi")
     if not isinstance(cappi, list) or not cappi:
         raise ValueError("Response does not contain cappi frames")
@@ -194,59 +213,33 @@ def collect_cappi(row: dict[str, Any], max_frames: int) -> list[tuple[datetime, 
     return frames[-max_frames:]
 
 
-def download_frame(url: str, cache_dir: Path, timeout: float = 30) -> Path:
-    cache_dir.mkdir(parents=True, exist_ok=True)
-    filename = url.rsplit("/", 1)[-1].replace("!wbdstyle", "")
-    path = cache_dir / filename
-    if path.exists() and path.stat().st_size > 0:
-        return path
-    request = urllib.request.Request(url, headers={"User-Agent": "nowcast-mvp/0.1"})
-    with urllib.request.urlopen(request, timeout=timeout) as response:
-        path.write_bytes(response.read())
-    return path
-
-
-def cleanup_cache(cache_dir: Path, max_age_hours: float = 2.0) -> None:
-    """Remove files in the cache directory older than max_age_hours."""
-    if not cache_dir.exists():
-        return
-    now = time.time()
-    for file_path in cache_dir.glob("*.png"):
-        try:
-            if file_path.is_file():
-                mtime = file_path.stat().st_mtime
-                if (now - mtime) > (max_age_hours * 3600):
-                    file_path.unlink()
-        except Exception as e:
-            print(
-                f"Warning: failed to delete old cache file {file_path}: {e}",
-                file=sys.stderr,
-            )
-
-
-def image_to_dbz(image: Image.Image) -> np.ndarray:
-    rgba = np.array(image.convert("RGBA"), dtype=np.uint8)
-    rgb = rgba[:, :, :3].astype(np.int32)
-    alpha = rgba[:, :, 3]
-
-    palette_dbz = np.array([dbz for dbz, _ in DBZ_PALETTE], dtype=np.float32)
-    palette_rgb = np.array([rgb for _, rgb in DBZ_PALETTE], dtype=np.int32)
-
-    diff = rgb[:, :, None, :] - palette_rgb[None, None, :, :]
-    dist2 = np.sum(diff * diff, axis=3)
-    nearest = np.argmin(dist2, axis=2)
-    min_dist = np.sqrt(np.min(dist2, axis=2).astype(np.float32))
-    chroma = np.max(rgb, axis=2) - np.min(rgb, axis=2)
-
-    dbz = np.zeros(alpha.shape, dtype=np.float32)
-    valid = (alpha > ALPHA_THRESHOLD) & (chroma > 35) & (min_dist < 120.0)
-    dbz[valid] = palette_dbz[nearest[valid]]
-    return dbz
+# ═══════════════════════════════════════════════════════════════════════════════
+# 帧加载
+# ═══════════════════════════════════════════════════════════════════════════════
 
 
 def load_frames(
     entries: list[tuple[datetime, str]], cache_dir: Path, download_timeout: float = 30
 ) -> list[Frame]:
+    """下载并加载 CAPPI 帧，完成 PNG → dBZ 转换。
+
+    协调 data_fetcher（下载）和 radar_processor（图像转换）两层：
+        1. 调用 download_frame() 下载/命中缓存
+        2. 用 PIL 打开图片
+        3. 调用 image_to_dbz() 反算 dBZ 数组
+        4. 校验帧数和尺寸一致性
+
+    Args:
+        entries: collect_cappi() 返回的 (timestamp, url) 列表。
+        cache_dir: 本地缓存目录。
+        download_timeout: 每帧下载超时时间。
+
+    Returns:
+        Frame 对象列表。
+
+    Raises:
+        ValueError: 帧数不足 2（光流至少需要两帧），或帧尺寸不一致。
+    """
     frames: list[Frame] = []
     for timestamp, url in entries:
         path = download_frame(url, cache_dir, timeout=download_timeout)
@@ -268,292 +261,24 @@ def load_frames(
     return frames
 
 
-def lon_lat_to_pixel(
-    lon: float, lat: float, bounds: Bounds, width: int, height: int
-) -> tuple[float, float]:
-    x = (lon - bounds.min_lon) / (bounds.max_lon - bounds.min_lon) * width
-    y = (bounds.max_lat - lat) / (bounds.max_lat - bounds.min_lat) * height
-    return x, y
-
-
-def pixel_grids(
-    bounds: Bounds, width: int, height: int
-) -> tuple[np.ndarray, np.ndarray]:
-    xs = np.arange(width, dtype=np.float64) + 0.5
-    ys = np.arange(height, dtype=np.float64) + 0.5
-    lon = bounds.min_lon + xs / width * (bounds.max_lon - bounds.min_lon)
-    lat = bounds.max_lat - ys / height * (bounds.max_lat - bounds.min_lat)
-    return np.meshgrid(lon, lat)
-
-
-def haversine_km(
-    lon1: np.ndarray, lat1: np.ndarray, lon2: float, lat2: float
-) -> np.ndarray:
-    lon1_rad = np.radians(lon1)
-    lat1_rad = np.radians(lat1)
-    lon2_rad = math.radians(lon2)
-    lat2_rad = math.radians(lat2)
-    dlon = lon1_rad - lon2_rad
-    dlat = lat1_rad - lat2_rad
-    a = (
-        np.sin(dlat / 2) ** 2
-        + np.cos(lat1_rad) * math.cos(lat2_rad) * np.sin(dlon / 2) ** 2
-    )
-    return EARTH_RADIUS_KM * 2 * np.arcsin(np.sqrt(a))
-
-
-def court_mask(bounds: Bounds, width: int, height: int) -> np.ndarray:
-    lon_grid, lat_grid = pixel_grids(bounds, width, height)
-    return haversine_km(lon_grid, lat_grid, COURT["lon"], COURT["lat"]) <= RADIUS_KM
-
-
-def estimate_motion(frames: list[Frame]) -> tuple[float, float, float]:
-    motions: list[tuple[float, float]] = []
-    for prev, curr in zip(frames[:-1], frames[1:]):
-        prev_gray = np.clip(prev.dbz / 70.0 * 255.0, 0, 255).astype(np.uint8)
-        curr_gray = np.clip(curr.dbz / 70.0 * 255.0, 0, 255).astype(np.uint8)
-        flow = cv2.calcOpticalFlowFarneback(
-            prev_gray,
-            curr_gray,
-            None,
-            pyr_scale=0.5,
-            levels=3,
-            winsize=31,
-            iterations=3,
-            poly_n=5,
-            poly_sigma=1.2,
-            flags=0,
-        )
-        signal = (prev.dbz >= 5) | (curr.dbz >= 5)
-        if int(signal.sum()) < 20:
-            continue
-        dx = float(np.median(flow[:, :, 0][signal]))
-        dy = float(np.median(flow[:, :, 1][signal]))
-        if math.isfinite(dx) and math.isfinite(dy):
-            motions.append((dx, dy))
-    if not motions:
-        return 0.0, 0.0, 0.0
-    arr = np.array(motions, dtype=np.float32)
-    dx = float(np.median(arr[:, 0]))
-    dy = float(np.median(arr[:, 1]))
-    consistency = float(max(0.0, 1.0 - np.mean(np.std(arr, axis=0)) / 8.0))
-    return dx, dy, consistency
-
-
-def translate_dbz(dbz: np.ndarray, dx: float, dy: float, steps: int) -> np.ndarray:
-    matrix = np.array(
-        [[1.0, 0.0, dx * steps], [0.0, 1.0, dy * steps]], dtype=np.float32
-    )
-    return cv2.warpAffine(
-        dbz,
-        matrix,
-        (dbz.shape[1], dbz.shape[0]),
-        flags=cv2.INTER_NEAREST,
-        borderMode=cv2.BORDER_CONSTANT,
-        borderValue=0,
-    )
-
-
-def dbz_to_rain_rate(dbz: float) -> float:
-    """Marshall-Palmer Z-R relationship (Z = 200 * R^1.6)"""
-    if dbz <= 0:
-        return 0.0
-    z = 10 ** (dbz / 10.0)
-    return (z / 200.0) ** (1 / 1.6)
-
-
-def summarize_area(dbz: np.ndarray, mask: np.ndarray) -> dict[str, float]:
-    values = dbz[mask]
-    has_echo = values >= RADAR_ECHO_THRESHOLD_DBZ
-    has_playable = values >= PLAYABLE_RAIN_THRESHOLD_DBZ
-
-    echo_coverage = float(has_echo.mean()) if values.size else 0.0
-    playable_coverage = float(has_playable.mean()) if values.size else 0.0
-    max_dbz = float(values.max()) if values.size else 0.0
-
-    mean_rain_rate = 0.0
-    if has_playable.any():
-        rain_rates = [dbz_to_rain_rate(float(v)) for v in values[has_playable]]
-        mean_rain_rate = float(np.mean(rain_rates))
-
-    return {
-        "echo_coverage": echo_coverage,
-        "playable_coverage": playable_coverage,
-        "max_dbz": max_dbz,
-        "mean_rain_rate": mean_rain_rate,
-    }
-
-
-def probability_from_stats(
-    stats: dict[str, float],
-    horizon_steps: int,
-    motion_consistency: float,
-    qpf_has_rain: bool,
-) -> float:
-    coverage = stats["playable_coverage"]
-    max_dbz = stats["max_dbz"]
-    rain_rate = stats["mean_rain_rate"]
-
-    if max_dbz < PLAYABLE_RAIN_THRESHOLD_DBZ:
-        base_prob = min(0.1, stats["echo_coverage"] * 0.5)
-    else:
-        coverage_score = min(1.0, coverage / 0.15)
-        intensity_score = min(1.0, rain_rate / 5.0)
-        raw = 0.2 + 0.5 * coverage_score + 0.3 * intensity_score
-        horizon_discount = {5: 1.0, 10: 0.85, 20: 0.62}.get(horizon_steps, 0.7)
-        base_prob = raw * horizon_discount * (0.8 + 0.2 * motion_consistency)
-
-    if base_prob > 0.2 and not qpf_has_rain:
-        base_prob *= 0.5
-    elif base_prob < 0.2 and qpf_has_rain:
-        base_prob = max(base_prob, 0.3)
-
-    return round(float(max(0.0, min(0.99, base_prob))), 2)
-
-
-def confidence_label(
-    horizon_steps: int, motion_consistency: float, frame_count: int
-) -> str:
-    if horizon_steps >= 20:
-        return "low"
-    if frame_count >= 4 and motion_consistency >= 0.55:
-        return "high" if horizon_steps == 5 else "medium"
-    return "medium" if horizon_steps == 5 else "low"
-
-
-def create_debug_image(
-    latest: Frame, bounds: Bounds, mask: np.ndarray, path: Path
-) -> None:
-    base = latest.rgba.convert("RGBA")
-    overlay = Image.new("RGBA", base.size, (0, 0, 0, 0))
-    draw = ImageDraw.Draw(overlay)
-    mask_img = Image.fromarray(np.where(mask, 80, 0).astype(np.uint8), mode="L")
-    radius_layer = Image.new("RGBA", base.size, (255, 255, 255, 0))
-    radius_layer.putalpha(mask_img)
-    overlay = Image.alpha_composite(overlay, radius_layer)
-
-    x, y = lon_lat_to_pixel(COURT["lon"], COURT["lat"], bounds, base.width, base.height)
-    draw = ImageDraw.Draw(overlay)
-    draw.ellipse(
-        (x - 6, y - 6, x + 6, y + 6),
-        fill=(255, 0, 0, 255),
-        outline=(255, 255, 255, 255),
-        width=2,
-    )
-    draw.text((x + 10, y - 10), COURT["name"], fill=(255, 0, 0, 255))
-
-    path.parent.mkdir(parents=True, exist_ok=True)
-    Image.alpha_composite(base, overlay).save(path)
-
-
-def save_radar_frames(
-    frames: list[Frame], bounds: Bounds, mask: np.ndarray, output_dir: Path
-) -> list[dict[str, str]]:
-    """Save each CAPPI frame as individual PNG with court marker overlay.
-
-    Returns list of {time, path, timestamp} for the frontend timeline player.
-    """
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    result = []
-    for i, f in enumerate(frames):
-        base = f.rgba.convert("RGBA")
-        overlay = Image.new("RGBA", base.size, (0, 0, 0, 0))
-
-        # Draw configured court radius.
-        mask_img = Image.fromarray(np.where(mask, 60, 0).astype(np.uint8), mode="L")
-        radius_layer = Image.new("RGBA", base.size, (255, 255, 255, 0))
-        radius_layer.putalpha(mask_img)
-        overlay = Image.alpha_composite(overlay, radius_layer)
-
-        draw = ImageDraw.Draw(overlay)
-        # Court marker
-        x, y = lon_lat_to_pixel(
-            COURT["lon"], COURT["lat"], bounds, base.width, base.height
-        )
-        draw.ellipse(
-            (x - 5, y - 5, x + 5, y + 5),
-            fill=(255, 0, 0, 255),
-            outline=(255, 255, 255, 200),
-            width=2,
-        )
-
-        # Timestamp label
-        time_str = f.timestamp.strftime("%H:%M")
-        draw.text((8, 8), time_str, fill=(255, 255, 255, 220))
-
-        composed = Image.alpha_composite(base, overlay)
-        fname = f"frame_{i:02d}.png"
-        out_path = output_dir / fname
-        composed.save(out_path)
-
-        result.append(
-            {
-                "time": time_str,
-                "path": str(out_path),
-                "timestamp": f.timestamp.isoformat(),
-            }
-        )
-
-    return result
-
-
-def create_radar_contact_sheet(
-    frame_entries: list[dict[str, str]],
-    output_path: Path,
-    max_frames: int = 6,
-) -> str:
-    """Create a stable contact sheet for multimodal radar visual QA."""
-    selected = frame_entries[-max_frames:]
-    if not selected:
-        return ""
-
-    images: list[tuple[dict[str, str], Image.Image]] = []
-    for entry in selected:
-        path = Path(entry.get("path", ""))
-        if not path.exists():
-            continue
-        images.append((entry, Image.open(path).convert("RGBA")))
-    if not images:
-        return ""
-
-    thumb_w = 160
-    label_h = 28
-    pad = 10
-    thumbs: list[tuple[dict[str, str], Image.Image]] = []
-    for entry, img in images:
-        ratio = thumb_w / max(1, img.width)
-        thumb_h = max(1, int(img.height * ratio))
-        thumb = img.resize((thumb_w, thumb_h), Image.Resampling.LANCZOS)
-        thumbs.append((entry, thumb))
-
-    cell_h = max(thumb.height for _, thumb in thumbs) + label_h
-    sheet_w = pad + len(thumbs) * (thumb_w + pad)
-    sheet_h = pad * 2 + cell_h
-    sheet = Image.new("RGBA", (sheet_w, sheet_h), (12, 18, 28, 255))
-    draw = ImageDraw.Draw(sheet)
-
-    for idx, (entry, thumb) in enumerate(thumbs):
-        x = pad + idx * (thumb_w + pad)
-        y = pad + label_h
-        draw.rectangle(
-            (x - 1, y - label_h, x + thumb_w + 1, y + cell_h - label_h + 1),
-            outline=(80, 90, 105, 255),
-            width=1,
-        )
-        draw.text(
-            (x + 8, pad + 7),
-            f"{idx + 1}. {entry.get('time', '--:--')}",
-            fill=(230, 235, 245, 255),
-        )
-        sheet.alpha_composite(thumb, (x, y))
-
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    sheet.convert("RGB").save(output_path, quality=75)
-    return str(output_path)
+# ═══════════════════════════════════════════════════════════════════════════════
+# QPF 与官方预报
+# ═══════════════════════════════════════════════════════════════════════════════
 
 
 def check_qpf_rain(row: dict[str, Any], steps: int) -> bool:
+    """检查官方 QPF 在指定步数内是否有降雨。
+
+    逐条检查 qpf6min 数组中前 steps 条的降雨量 (r 字段)，
+    只要有一条 > 0 即返回 True。
+
+    Args:
+        row: first_row() 返回的数据记录。
+        steps: 检查的步数（每步 6 分钟）。
+
+    Returns:
+        True 表示 QPF 预报有降雨。
+    """
     qpf = row.get("qpf6min", [])
     if not isinstance(qpf, list):
         return False
@@ -569,6 +294,17 @@ def check_qpf_rain(row: dict[str, Any], steps: int) -> bool:
 
 
 def official_summary(row: dict[str, Any]) -> dict[str, Any]:
+    """提取 API 响应中的官方 QPF 摘要信息。
+
+    包含 QPF 文字摘要、起始时间以及逐 6 分钟降雨预报明细。
+    这些信息会直接嵌入最终报告，供 LLM 诊断参考。
+
+    Args:
+        row: first_row() 返回的数据记录。
+
+    Returns:
+        包含 official_qpf6min_summary / origin_dt / 明细列表的字典。
+    """
     qpf6min = row.get("qpf6min") if isinstance(row.get("qpf6min"), list) else []
     return {
         "official_qpf6min_summary": row.get("qpf6min_summary", ""),
@@ -586,39 +322,44 @@ def official_summary(row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# 气象站数据提取
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
 def extract_station_and_forecast_data(
     row: dict[str, Any], grid_data: dict[str, Any] | None
 ) -> dict[str, Any]:
-    """Extract real-time weather from API 1 (station) and forecasts from API 2 (grid).
+    """从两个 API 源提取实况天气和预报数据。
 
-    Real-time data comes from the nearest physical weather station (via sk_ fields).
-    Forecasts (hourly/7-day) come from the grid-interpolated ra.gd121.cn API.
+    数据融合策略：
+        - 实况数据（温湿风、雨量等）来自 API 1 的最近气象站观测
+        - 逐时预报和 7 天预报来自 API 2 的格点插值
+        - 如果 API 2 失败（grid_data=None），预报字段为空列表
+
+    占位数据过滤：
+        - API 有时会返回"占位"记录（温度=0, 天气=晴, 风向=西北风），
+          这些是无效数据，会被自动跳过
+
+    Args:
+        row: first_row() 返回的数据记录（含 sk_* 气象站字段）。
+        grid_data: fetch_grid_weather() 返回的格点数据，或 None。
+
+    Returns:
+        融合后的站点实况 + 预报字典。
     """
-    # 1. Extract station real-time data from API 1
-    try:
-        humidity = float(row.get("sk_h", 0))
-    except (ValueError, TypeError):
-        humidity = 0.0
+    # ---- 1. 提取 API 1 的气象站实况 ----
+    def _safe_float(val, default=0.0):
+        try:
+            return float(val)
+        except (ValueError, TypeError):
+            return default
 
-    try:
-        temp = float(row.get("sk_t", 0))
-    except (ValueError, TypeError):
-        temp = 0.0
-
-    try:
-        wind_speed = float(row.get("sk_wp", 0))
-    except (ValueError, TypeError):
-        wind_speed = 0.0
-
-    try:
-        rain_1h = float(row.get("sk_r1h", 0))
-    except (ValueError, TypeError):
-        rain_1h = 0.0
-
-    try:
-        rain_5m = float(row.get("sk_r5m", 0))
-    except (ValueError, TypeError):
-        rain_5m = 0.0
+    humidity = _safe_float(row.get("sk_h"))
+    temp = _safe_float(row.get("sk_t"))
+    wind_speed = _safe_float(row.get("sk_wp"))
+    rain_1h = _safe_float(row.get("sk_r1h"))
+    rain_5m = _safe_float(row.get("sk_r5m"))
 
     station_realtime = {
         "source": "station_observed",
@@ -642,18 +383,20 @@ def extract_station_and_forecast_data(
         "seven_day_forecast": [],
     }
 
-    # 2. Extract forecasts from API 2
+    # ---- 2. 融合 API 2 的预报数据 ----
     if grid_data:
+        # 未来 2 小时降雨预报
         rain_dto = grid_data.get("nowTwoHourResDto", {})
         station_realtime["rain_2h_message"] = rain_dto.get("message", "")
         station_realtime["rain_2h_flag"] = rain_dto.get("rainFlag", 0)
 
-        # Extract 7-day forecast
+        # 7 天预报
         seven_day = []
         for item in grid_data.get("sevenDayWeatherForecast", [])[:7]:
             if isinstance(item, dict):
                 max_t = item.get("maxTemperature")
                 min_t = item.get("minTemperature")
+                # 过滤占位记录
                 is_placeholder = (
                     (max_t is None or max_t == 0)
                     and (min_t is None or min_t == 0)
@@ -677,7 +420,7 @@ def extract_station_and_forecast_data(
                 )
         station_realtime["seven_day_forecast"] = seven_day
 
-        # Extract upcoming hourly forecast
+        # 逐时预报（取未来 12 小时）
         hourly = []
         for item in grid_data.get("oneDay24WeatherForecast", [])[:24]:
             if isinstance(item, dict):
@@ -703,6 +446,11 @@ def extract_station_and_forecast_data(
     return station_realtime
 
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# 报告组装
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
 def build_report(
     row: dict[str, Any],
     bounds: Bounds,
@@ -710,26 +458,50 @@ def build_report(
     debug_image: str,
     grid_data: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    """组装完整的预报报告。
+
+    这是 nowcast 模块的核心协调函数，按以下步骤执行：
+        1. 提取气象站数据
+        2. 生成球场掩膜并估计运动
+        3. 帧质量评估和趋势分析
+        4. 上游回波检测
+        5. 当前和外推时段的回波统计
+        6. 降雨概率、置信度、冲突检测
+        7. 四层风险引擎计算
+        8. 可视化输出（调试图 + 雷达帧 + 拼图）
+        9. 可打性评分
+        10. 拼装最终 JSON 报告
+
+    Args:
+        row: first_row() 返回的 API 数据记录。
+        bounds: parse_bounds() 解析的地理边界。
+        frames: load_frames() 加载的帧列表。
+        debug_image: 调试图输出路径（空字符串则跳过）。
+        grid_data: 格点 API 数据（可选）。
+
+    Returns:
+        包含所有预报信息的完整报告字典。
+    """
     latest = frames[-1]
     height, width = latest.dbz.shape
     grid_realtime = extract_station_and_forecast_data(row, grid_data)
     mask = court_mask(bounds, width, height)
     dx, dy, motion_consistency = estimate_motion(frames)
 
-    # ---- Frame quality control ----
+    # ---- 帧质量评估 ----
     quality_scores = []
     for i, f in enumerate(frames):
         prev = frames[i - 1].dbz if i > 0 else None
         quality_scores.append(frame_quality(f.dbz, mask, prev))
 
-    # ---- Dual-window trend analysis ----
+    # ---- 双窗口趋势分析 ----
     frames_dbz = [f.dbz for f in frames]
     trends = compute_trends(frames_dbz, mask, quality_scores)
 
-    # ---- Upstream echo detection ----
+    # ---- 上游回波检测 ----
     upstream = detect_upstream_echo(latest.dbz, mask, dx, dy, steps=5)
 
-    # ---- Original radar analysis ----
+    # ---- 当前回波统计 ----
     current_stats = summarize_area(latest.dbz, mask)
     rain_probability: dict[str, float] = {}
     confidence: dict[str, str] = {}
@@ -737,6 +509,7 @@ def build_report(
     coverage_ratio: dict[str, float] = {}
     conflicts = set()
 
+    # ---- 各时段外推统计 ----
     for label, steps in HORIZONS.items():
         future = translate_dbz(latest.dbz, dx, dy, steps)
         stats = summarize_area(future, mask)
@@ -746,6 +519,7 @@ def build_report(
         confidence[label] = confidence_label(steps, motion_consistency, len(frames))
         max_dbz_nearby[label] = int(round(stats["max_dbz"]))
         coverage_ratio[label] = round(stats["playable_coverage"], 4)
+        # 冲突检测：雷达和 QPF 不一致
         if prob > 0.3 and not qpf_rain:
             conflicts.add("radar_qpf_disagreement")
         elif prob < 0.3 and qpf_rain:
@@ -758,6 +532,7 @@ def build_report(
     if motion_consistency < 0.5:
         conflicts.add("low_motion_confidence")
 
+    # ---- 诊断提示 ----
     debug_hints = []
     if "radar_qpf_disagreement" in conflicts:
         debug_hints.append("CAPPI detects echo but QPF reports no rain.")
@@ -777,7 +552,7 @@ def build_report(
         "debug_hints": debug_hints,
     }
 
-    # ---- Four-layer risk engine ----
+    # ---- 四层风险引擎 ----
     qpf6min_all_zero = not qpf_has_rain_any
     rain_flag = grid_realtime.get("rain_2h_flag", 0) or 0
     hourly = grid_realtime.get("hourly_forecast", [])
@@ -794,10 +569,10 @@ def build_report(
         hourly_forecast=hourly,
     )
 
+    # ---- 可视化输出 ----
     if debug_image:
         create_debug_image(latest, bounds, mask, Path(debug_image))
 
-    # Save individual frames for timeline player
     frames_dir = (
         Path(debug_image).parent / "radar_frames"
         if debug_image
@@ -808,6 +583,7 @@ def build_report(
         radar_frame_entries, frames_dir.parent / "radar_contact_sheet.jpg"
     )
 
+    # ---- 组装报告 ----
     court_x, court_y = lon_lat_to_pixel(
         COURT["lon"], COURT["lat"], bounds, width, height
     )
@@ -864,64 +640,3 @@ def build_report(
         **official_summary(row),
     }
     return report
-
-
-def run_once(args: argparse.Namespace) -> None:
-    grid_data = None
-    if args.daemon:
-        print(f"Fetching live data for lon={COURT['lon']}, lat={COURT['lat']}...")
-        payload = fetch_weather_data(COURT["lon"], COURT["lat"])
-        grid_data = fetch_grid_weather(COURT["lon"], COURT["lat"])
-    else:
-        print(f"Loading local response from {args.response}...")
-        payload = load_response(Path(args.response))
-
-    row = first_row(payload)
-    bounds = parse_bounds(row)
-    entries = collect_cappi(row, args.max_frames)
-    frames = load_frames(entries, Path(args.cache_dir))
-    report = build_report(row, bounds, frames, args.debug_image, grid_data)
-
-    # Save calibration log for future backtesting
-    risk_scores = report.get("risk_scores", {})
-    save_calibration_log(report, risk_scores)
-
-    text = json.dumps(report, ensure_ascii=False, indent=2)
-
-    if args.output == "-":
-        print(text)
-    else:
-        output = Path(args.output)
-        output.parent.mkdir(parents=True, exist_ok=True)
-        output.write_text(text + "\n", encoding="utf-8")
-        print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Wrote {output}")
-
-    # Auto-cleanup old frames to prevent unlimited disk usage
-    cleanup_cache(Path(args.cache_dir), max_age_hours=2.0)
-
-
-def main() -> int:
-    args = parse_args()
-    if args.daemon:
-        print(f"Starting in daemon mode. Interval: {args.interval}s")
-        while True:
-            try:
-                run_once(args)
-            except Exception as e:
-                print(
-                    f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Error in daemon iteration: {e}",
-                    file=sys.stderr,
-                )
-            print(f"Waiting {args.interval} seconds...")
-            time.sleep(args.interval)
-    else:
-        run_once(args)
-    return 0
-
-
-if __name__ == "__main__":
-    try:
-        raise SystemExit(main())
-    except Exception as exc:
-        print(f"error: {exc}", file=sys.stderr)
-        raise SystemExit(1)

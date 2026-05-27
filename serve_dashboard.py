@@ -21,24 +21,10 @@ import urllib.request
 from pathlib import Path
 
 
-def _load_dotenv(path: str = ".env") -> None:
-    """从 .env 文件中加载 key=value 键值对到 os.environ（不覆盖已有值）。"""
-    env_path = Path(path)
-    if not env_path.is_file():
-        return
-    for line in env_path.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, _, value = line.partition("=")
-        key = key.strip()
-        value = value.strip().strip("'\"")
-        if key and key not in os.environ:
-            os.environ[key] = value
-
+from utils import load_dotenv
 
 # 先加载 .env，再导入 config（config 中通过 os.getenv 读取 API Key）
-_load_dotenv()
+load_dotenv()
 
 from config import (  # noqa: E402
     AMAP_API_KEY,
